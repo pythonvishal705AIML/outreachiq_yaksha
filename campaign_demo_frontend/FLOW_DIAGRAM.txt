@@ -1,0 +1,330 @@
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                    LEAD SELECTION & CAMPAIGN CREATION FLOW                    ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  USER ACTION: "Find CEOs in fintech companies in San Francisco"            │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 1: APOLLO LEAD SEARCH                                                 │
+│  ═══════════════════════════════════════════════════════════════════════    │
+│  POST /api/agent/v1/leads/search/people/                                    │
+│                                                                              │
+│  Request:                                                                    │
+│  {                                                                           │
+│    "session_id": "abc-123",                                                  │
+│    "params": {                                                               │
+│      "person_titles": ["CEO", "Founder"],                                   │
+│      "organization_industry_tag_ids": ["fintech"],                          │
+│      "person_locations": ["San Francisco, CA"]                              │
+│    }                                                                         │
+│  }                                                                           │
+│                                                                              │
+│  Response:                                                                   │
+│  {                                                                           │
+│    "people": [...],                                                          │
+│    "search_run_id": "sr-xyz-789",  ◄── STORED IN SESSION                   │
+│    "pagination": { "total": 20 }                                            │
+│  }                                                                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 2: DISPLAY LEAD RESULTS                                               │
+│  ═══════════════════════════════════════════════════════════════════════    │
+│  UI Component: Lead Results Card                                            │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │ Found 20 leads                                                      │    │
+│  │ Search: sr-xyz-789                                                  │    │
+│  │                                                                      │    │
+│  │ 1  John Smith                                                       │    │
+│  │    CEO & Founder                                                    │    │
+│  │    Acme Fintech                                                     │    │
+│  │    📍 San Francisco, CA                                             │    │
+│  │                                                                      │    │
+│  │ 2  Jane Doe                                                         │    │
+│  │    Chief Executive Officer                                          │    │
+│  │    PayFlow Inc                                                      │    │
+│  │    📍 San Francisco, CA                                             │    │
+│  │                                                                      │    │
+│  │ ... and 18 more leads                                               │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 3: LEAD SELECTION PANEL (NEW!)                                        │
+│  ═══════════════════════════════════════════════════════════════════════    │
+│  UI Component: Interactive Selection Panel                                  │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │ 🔷 Select leads for your campaign                                  │    │
+│  │ Choose how many leads to include in this campaign                  │    │
+│  │                                                                      │    │
+│  │ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐              │    │
+│  │ │All leads │ │ Top 75%  │ │ Top 50%  │ │ Top 25%  │              │    │
+│  │ │20 leads  │ │ 15 leads │ │ 10 leads │ │ 5 leads  │              │    │
+│  │ └──────────┘ └──────────┘ └──────────┘ └──────────┘              │    │
+│  │                                                                      │    │
+│  │ [User hovers: Blue border + glow effect]                           │    │
+│  │ [User clicks "Top 50%": Button turns blue]                         │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  USER ACTION: Clicks "Top 50%" button                                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 4: LEAD SELECTION API CALL                                            │
+│  ═══════════════════════════════════════════════════════════════════════    │
+│  POST /api/agent/v1/leads/select/                                           │
+│                                                                              │
+│  Request:                                                                    │
+│  {                                                                           │
+│    "session_id": "abc-123",                                                  │
+│    "search_run_id": "sr-xyz-789",                                           │
+│    "selection_percent": 50                                                  │
+│  }                                                                           │
+│                                                                              │
+│  Backend Processing:                                                         │
+│  1. Fetch all leads from search_run_id                                      │
+│  2. Calculate: 20 leads × 50% = 10 leads                                    │
+│  3. Select top 10 leads                                                     │
+│  4. Create lead_list in lead_lists_new table                                │
+│  5. Store selected_lead_ids in session state                                │
+│                                                                              │
+│  Response:                                                                   │
+│  {                                                                           │
+│    "lead_list_id": "ll-456-def",      ◄── STORED IN SESSION                │
+│    "selected_count": 10,                                                    │
+│    "selection_percent": 50,                                                 │
+│    "next_action": {                                                         │
+│      "type": "call_api",                                                    │
+│      "endpoint": "/api/agent/v1/campaigns/create/"                         │
+│    }                                                                         │
+│  }                                                                           │
+│                                                                              │
+│  Session State Updated:                                                      │
+│  {                                                                           │
+│    "search_run_id": "sr-xyz-789",                                           │
+│    "lead_list_id": "ll-456-def",                                            │
+│    "selected_lead_ids": ["id1", "id2", ..., "id10"],                       │
+│    "selection_percent": 50                                                  │
+│  }                                                                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 5: CONFIRMATION MESSAGE                                               │
+│  ═══════════════════════════════════════════════════════════════════════    │
+│  UI Component: Success Message                                              │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │ ✅ Selected 10 leads (50%) — lead list created                     │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  Agent Message:                                                              │
+│  "Great! Now let's build your campaign. What's the goal of this campaign?"  │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  USER ACTION: "Generate leads for our new fintech product"                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 6: CAMPAIGN CREATION                                                  │
+│  ═══════════════════════════════════════════════════════════════════════    │
+│  POST /api/agent/v1/campaigns/create/                                       │
+│                                                                              │
+│  Request:                                                                    │
+│  {                                                                           │
+│    "session_id": "abc-123",                                                  │
+│    "campaign_name": "Fintech Product Launch",                               │
+│    "creation_mode": "ai"                                                    │
+│  }                                                                           │
+│                                                                              │
+│  Backend Processing:                                                         │
+│  1. Retrieve lead_list_id from session state                                │
+│  2. Create campaign record                                                  │
+│  3. Generate email sequences using AI                                       │
+│  4. Link campaign to lead_list_id                                           │
+│  5. Store campaign_id in session state                                      │
+│                                                                              │
+│  Response:                                                                   │
+│  {                                                                           │
+│    "campaign_id": "camp-789-ghi",    ◄── STORED IN SESSION                 │
+│    "campaign_name": "Fintech Product Launch",                               │
+│    "status": "draft",                                                       │
+│    "steps": [...]                                                           │
+│  }                                                                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 7: CAMPAIGN SUMMARY DISPLAY                                           │
+│  ═══════════════════════════════════════════════════════════════════════    │
+│  UI Component: Campaign Summary Card                                        │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │ Campaign Ready                                                      │    │
+│  │ Fintech Product Launch                                              │    │
+│  │ [draft] [3 email steps] [ID: camp789...]                           │    │
+│  │                                                                      │    │
+│  │ ┌──────────────────────────────────────────────────────────────┐  │    │
+│  │ │ STEP 1  [⚡ Immediate] [📬 Always send]                       │  │    │
+│  │ │                                                                │  │    │
+│  │ │ Subject: Quick question about fintech growth                  │  │    │
+│  │ │                                                                │  │    │
+│  │ │ Hi {{first_name}},                                             │  │    │
+│  │ │                                                                │  │    │
+│  │ │ I noticed your work at {{company}} and wanted to reach out... │  │    │
+│  │ │                                                                │  │    │
+│  │ │ ┌──────────────┐  ┌──────────────────────┐                   │  │    │
+│  │ │ │ 📧 Send Test │  │ 🚀 Send to All Leads │                   │  │    │
+│  │ │ └──────────────┘  └──────────────────────┘                   │  │    │
+│  │ └──────────────────────────────────────────────────────────────┘  │    │
+│  │                                                                      │    │
+│  │ [Additional steps shown below...]                                   │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  USER ACTION: Clicks "🚀 Send to All Leads"                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 8: SEND CAMPAIGN TO SELECTED LEADS                                    │
+│  ═══════════════════════════════════════════════════════════════════════    │
+│  POST /api/agent/v1/campaigns/send-to-leads/                                │
+│                                                                              │
+│  Request:                                                                    │
+│  {                                                                           │
+│    "campaign_id": "camp-789-ghi",                                           │
+│    "session_id": "abc-123",                                                  │
+│    "step_order": 1,                                                         │
+│    "test_mode": false                                                       │
+│  }                                                                           │
+│                                                                              │
+│  Backend Processing:                                                         │
+│  1. Retrieve selected_lead_ids from session state                           │
+│     → ["id1", "id2", "id3", ..., "id10"]                                   │
+│  2. Fetch lead details for each ID                                          │
+│  3. Personalize email body for each lead                                    │
+│     → Replace {{first_name}}, {{last_name}}, {{company}}                   │
+│  4. Send email to each lead via Gmail OAuth or SMTP                         │
+│  5. Create SentEmail record for each                                        │
+│  6. Return results                                                           │
+│                                                                              │
+│  Response:                                                                   │
+│  {                                                                           │
+│    "success": true,                                                         │
+│    "campaign_id": "camp-789-ghi",                                           │
+│    "total_leads": 10,                                                       │
+│    "sent_count": 10,                                                        │
+│    "failed_count": 0,                                                       │
+│    "sent_from": "user@company.com"                                          │
+│  }                                                                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 9: SUCCESS CONFIRMATION                                               │
+│  ═══════════════════════════════════════════════════════════════════════    │
+│  UI Component: Success Message                                              │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │ ℹ️ Sending from: user@company.com                                  │    │
+│  │                                                                      │    │
+│  │ ✅ Campaign emails sent from user@company.com!                     │    │
+│  │ Sent: 10 / 10 leads                                                │    │
+│  └────────────────────────────────────────────────────────────────────┘    │
+│                                                                              │
+│  Agent Message:                                                              │
+│  "Campaign sent successfully! You can track responses in the Inbox."        │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  COMPLETE! Campaign sent to 10 selected leads (50% of original 20)          │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                              KEY FEATURES                                     ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+✓ Flexible Selection: Choose 100%, 75%, 50%, or 25% of leads
+✓ Visual Feedback: Clear UI states (hover, selected, loading)
+✓ Session Persistence: All IDs stored in session state
+✓ Automatic Resolution: Backend auto-selects if needed
+✓ Email Personalization: Template variables for each lead
+✓ Error Handling: Graceful fallbacks and user messages
+✓ Responsive Design: Works on desktop, tablet, mobile
+
+
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                           SESSION STATE FLOW                                  ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+Initial State:
+{}
+
+After Search:
+{
+  "search_run_id": "sr-xyz-789"
+}
+
+After Selection:
+{
+  "search_run_id": "sr-xyz-789",
+  "lead_list_id": "ll-456-def",
+  "selected_lead_ids": ["id1", "id2", ..., "id10"],
+  "selection_percent": 50
+}
+
+After Campaign Creation:
+{
+  "search_run_id": "sr-xyz-789",
+  "lead_list_id": "ll-456-def",
+  "selected_lead_ids": ["id1", "id2", ..., "id10"],
+  "selection_percent": 50,
+  "campaign_id": "camp-789-ghi"
+}
+
+
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                            DATABASE CHANGES                                   ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+lead_lists_new table:
+┌──────────────┬─────────────────────────┬──────────────┬────────────────┐
+│ id (PK)      │ name                    │ org_id       │ search_run_id  │
+├──────────────┼─────────────────────────┼──────────────┼────────────────┤
+│ ll-456-def   │ Agent List abc12 (50%)  │ org-123      │ sr-xyz-789     │
+└──────────────┴─────────────────────────┴──────────────┴────────────────┘
+
+campaigns table:
+┌──────────────┬─────────────────────────┬──────────────┬────────────────┐
+│ id (PK)      │ name                    │ status       │ lead_list_id   │
+├──────────────┼─────────────────────────┼──────────────┼────────────────┤
+│ camp-789-ghi │ Fintech Product Launch  │ draft        │ ll-456-def     │
+└──────────────┴─────────────────────────┴──────────────┴────────────────┘
+
+sent_emails table:
+┌──────────────┬──────────────┬─────────────────────┬────────────┬──────────┐
+│ id (PK)      │ campaign_id  │ recipient_email     │ status     │ metadata │
+├──────────────┼──────────────┼─────────────────────┼────────────┼──────────┤
+│ se-001       │ camp-789-ghi │ john@acme.com       │ sent       │ {...}    │
+│ se-002       │ camp-789-ghi │ jane@payflow.com    │ sent       │ {...}    │
+│ ...          │ ...          │ ...                 │ ...        │ ...      │
+└──────────────┴──────────────┴─────────────────────┴────────────┴──────────┘

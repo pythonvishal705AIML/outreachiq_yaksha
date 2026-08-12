@@ -1,0 +1,57 @@
+# ========================
+# Python
+# ========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+
+# ========================
+# Virtual Environment
+# ========================
+myenv/
+venv/
+.venv/
+env/
+
+# ========================
+# Environment Variables
+# ========================
+.env
+.env.local
+.env.production
+
+# ========================
+# Django
+# ========================
+*.log
+debug.log
+db.sqlite3
+staticfiles/
+media/
+
+# ========================
+# IDE / Editor
+# ========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ========================
+# Certificates (sensitive)
+# ========================
+certs/
+
+# ========================
+# OS Files
+# ========================
+desktop.ini
+*.lnk

@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Backend Connection Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .test-result {
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        button {
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background: #5568d3;
+        }
+        pre {
+            background: #f4f4f4;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔌 Backend Connection Test</h1>
+    <p>This page tests the connection to your Django backend API.</p>
+    
+    <button onclick="testConnection()">Test Connection</button>
+    
+    <div id="results"></div>
+
+    <script src="/js-config/"></script>
+    <script>
+        const API_BASE_URL = (window.CONFIG && window.CONFIG.API_BASE_URL) || 'http://localhost:8000/api/agent/v1';
+        const DEFAULT_TENANT_ID = '12b2abd641734cce805b1544105042a7';  // Lopes account
+
+        async function testConnection() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<div class="test-result info">Testing connection...</div>';
+
+            try {
+                // Test 1: Check if server is reachable
+                resultsDiv.innerHTML += '<div class="test-result info">Step 1: Testing server reachability...</div>';
+                
+                const response = await fetch(`${API_BASE_URL}/conversation/init/`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        tenant_id: DEFAULT_TENANT_ID,
+                        text: ''
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                
+                resultsDiv.innerHTML += `
+                    <div class="test-result success">
+                        ✅ Connection Successful!
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    </div>
+                `;
+
+                // Test 2: Send a test message
+                if (data.session_id) {
+                    resultsDiv.innerHTML += '<div class="test-result info">Step 2: Testing message endpoint...</div>';
+                    
+                    const msgResponse = await fetch(`${API_BASE_URL}/conversation/message/`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            session_id: data.session_id,
+                            text: "Hello, this is a test message"
+                        })
+                    });
+
+                    if (!msgResponse.ok) {
+                        throw new Error(`Message test failed: HTTP ${msgResponse.status}`);
+                    }
+
+                    const msgData = await msgResponse.json();
+                    
+                    resultsDiv.innerHTML += `
+                        <div class="test-result success">
+                            ✅ Message Test Successful!
+                            <pre>${JSON.stringify(msgData, null, 2)}</pre>
+                        </div>
+                    `;
+
+                    // Test 3: Test lead search if next_action is present
+                    if (msgData.next_action && msgData.next_action.endpoint === '/api/agent/v1/leads/search/people/') {
+                        resultsDiv.innerHTML += '<div class="test-result info">Step 3: Testing lead search endpoint...</div>';
+                        
+                        const searchResponse = await fetch(`${API_BASE_URL}/leads/search/people/`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                session_id: data.session_id,
+                                params: msgData.slots || {},
+                                page: 1,
+                                per_page: 5
+                            })
+                        });
+
+                        if (!searchResponse.ok) {
+                            throw new Error(`Lead search test failed: HTTP ${searchResponse.status}`);
+                        }
+
+                        const searchData = await searchResponse.json();
+                        
+                        resultsDiv.innerHTML += `
+                            <div class="test-result success">
+                                ✅ Lead Search Test Successful!
+                                <strong>Found ${searchData.people?.length || 0} leads</strong>
+                                <pre>${JSON.stringify(searchData, null, 2).substring(0, 500)}...</pre>
+                            </div>
+                        `;
+                    }
+                }
+
+                resultsDiv.innerHTML += `
+                    <div class="test-result success">
+                        <strong>🎉 All Tests Passed!</strong><br>
+                        Your frontend is properly connected to the backend.<br>
+                        You can now use the main demo interface.
+                    </div>
+                `;
+
+            } catch (error) {
+                console.error('Connection test failed:', error);
+                
+                let errorMessage = error.message;
+                let suggestions = '';
+
+                if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+                    suggestions = `
+                        <strong>Possible issues:</strong>
+                        <ul>
+                            <li>Django server is not running (run: python manage.py runserver)</li>
+                            <li>Server is running on a different port</li>
+                            <li>CORS is not properly configured</li>
+                        </ul>
+                    `;
+                } else if (error.message.includes('404')) {
+                    suggestions = `
+                        <strong>Possible issues:</strong>
+                        <ul>
+                            <li>API endpoint URL is incorrect</li>
+                            <li>Check that URLs are configured in project/urls.py</li>
+                        </ul>
+                    `;
+                } else if (error.message.includes('403') || error.message.includes('CORS')) {
+                    suggestions = `
+                        <strong>CORS Issue:</strong>
+                        <ul>
+                            <li>Add 'http://localhost:8080' to CORS_ALLOWED_ORIGINS in settings.py</li>
+                            <li>Restart Django server after changing settings</li>
+                        </ul>
+                    `;
+                } else if (error.message.includes('400')) {
+                    suggestions = `
+                        <strong>Bad Request:</strong>
+                        <ul>
+                            <li>Check API request format matches backend expectations</li>
+                            <li>Verify tenant_id is being sent correctly</li>
+                        </ul>
+                    `;
+                }
+
+                resultsDiv.innerHTML += `
+                    <div class="test-result error">
+                        ❌ Connection Failed<br>
+                        <strong>Error:</strong> ${errorMessage}<br><br>
+                        ${suggestions}
+                    </div>
+                `;
+            }
+        }
+
+        // Auto-run test on page load
+        window.addEventListener('DOMContentLoaded', () => {
+            console.log('Backend test page loaded');
+        });
+    </script>
+</body>
+</html>

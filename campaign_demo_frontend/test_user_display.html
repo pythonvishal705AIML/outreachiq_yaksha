@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test User Display</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #1a1a2e;
+            color: white;
+        }
+        .test-section {
+            background: #16213e;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+        }
+        .user-card {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 15px;
+            background: #0f3460;
+            border-radius: 8px;
+        }
+        .user-av {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: #e94560;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+        }
+        .user-name {
+            font-weight: 600;
+            font-size: 14px;
+        }
+        .user-plan {
+            font-size: 12px;
+            opacity: 0.7;
+        }
+        button {
+            background: #e94560;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #d63447;
+        }
+        pre {
+            background: #0f3460;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧪 User Display Test</h1>
+    
+    <div class="test-section">
+        <h2>Current User Card</h2>
+        <div class="user-card">
+            <div class="user-av">JD</div>
+            <div class="user-meta">
+                <div class="user-name">John Doe</div>
+                <div class="user-plan">Pro Plan</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="test-section">
+        <h2>Actions</h2>
+        <button onclick="checkLocalStorage()">Check localStorage</button>
+        <button onclick="testUpdateUI()">Test Update UI</button>
+        <button onclick="simulateLogin()">Simulate Login</button>
+        <button onclick="clearStorage()">Clear Storage</button>
+    </div>
+
+    <div class="test-section">
+        <h2>Debug Output</h2>
+        <pre id="output">Click a button to see output...</pre>
+    </div>
+
+    <script>
+        function log(message) {
+            const output = document.getElementById('output');
+            output.textContent = typeof message === 'object' 
+                ? JSON.stringify(message, null, 2) 
+                : message;
+        }
+
+        function checkLocalStorage() {
+            const user = localStorage.getItem('user');
+            const token = localStorage.getItem('access_token');
+            const accountId = localStorage.getItem('account_id');
+            
+            log({
+                user: user ? JSON.parse(user) : null,
+                token: token ? 'Token exists' : 'No token',
+                accountId: accountId || 'No account_id'
+            });
+        }
+
+        function getUser() {
+            const userStr = localStorage.getItem('user');
+            return userStr ? JSON.parse(userStr) : null;
+        }
+
+        function updateUserUI() {
+            const user = getUser();
+            console.log('Updating user UI with:', user);
+            
+            if (user) {
+                const userNameEl = document.querySelector('.user-name');
+                const userAvEl = document.querySelector('.user-av');
+                const userPlanEl = document.querySelector('.user-plan');
+                
+                if (userNameEl) {
+                    userNameEl.textContent = user.full_name || user.email;
+                }
+                
+                if (userAvEl) {
+                    const initials = user.first_name && user.last_name 
+                        ? `${user.first_name[0]}${user.last_name[0]}`.toUpperCase()
+                        : user.email[0].toUpperCase();
+                    userAvEl.textContent = initials;
+                }
+                
+                if (userPlanEl && user.organization) {
+                    userPlanEl.textContent = user.organization.ghl_status || 'Active';
+                } else if (userPlanEl) {
+                    userPlanEl.textContent = 'Active';
+                }
+                
+                log('✅ UI Updated successfully!');
+            } else {
+                log('❌ No user found in localStorage');
+            }
+        }
+
+        function testUpdateUI() {
+            updateUserUI();
+        }
+
+        function simulateLogin() {
+            // Simulate a login response
+            const mockUser = {
+                id: "test-123",
+                email: "vishal.ghadage705@gmail.com",
+                first_name: "Vishal",
+                last_name: "Ghadage",
+                full_name: "Vishal Ghadage",
+                account_id: "test-account-123",
+                organization: {
+                    id: "test-account-123",
+                    name: "Test Organization",
+                    ghl_status: "Active"
+                }
+            };
+            
+            localStorage.setItem('user', JSON.stringify(mockUser));
+            localStorage.setItem('access_token', 'mock-token-123');
+            localStorage.setItem('account_id', 'test-account-123');
+            
+            log('✅ Simulated login complete. Now click "Test Update UI"');
+        }
+
+        function clearStorage() {
+            localStorage.clear();
+            log('✅ Storage cleared. Refresh page to see default state.');
+        }
+    </script>
+</body>
+</html>

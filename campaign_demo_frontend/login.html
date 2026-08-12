@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login - Agent</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="auth.css">
+</head>
+<body class="auth-page">
+
+  <div class="bg-grid"></div>
+  <div class="bg-orb bg-orb-1"></div>
+  <div class="bg-orb bg-orb-2"></div>
+
+  <div class="auth-container">
+    <div class="auth-card">
+      <div class="auth-logo">
+        <div class="logo-mark">
+          <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+            <path d="M16 2L30 10V22L16 30L2 22V10L16 2Z" stroke="currentColor" stroke-width="2"/>
+            <circle cx="16" cy="16" r="5" fill="currentColor"/>
+          </svg>
+        </div>
+        <span class="logo-text">Agent</span>
+      </div>
+
+      <div class="auth-header">
+        <h1>Welcome back</h1>
+        <p>Sign in to your account to continue</p>
+      </div>
+
+      <form id="loginForm" class="auth-form">
+        <div class="form-group">
+          <label for="email">Email</label>
+          <input 
+            type="email" 
+            id="email" 
+            name="email" 
+            placeholder="you@company.com" 
+            required 
+            autocomplete="email"
+          />
+        </div>
+
+        <div class="form-group">
+          <label for="password">Password</label>
+          <input 
+            type="password" 
+            id="password" 
+            name="password" 
+            placeholder="Enter your password" 
+            required 
+            autocomplete="current-password"
+          />
+        </div>
+
+        <div class="form-options">
+          <label class="checkbox-label">
+            <input type="checkbox" name="remember" />
+            <span>Remember me</span>
+          </label>
+          <a href="#" class="link-text">Forgot password?</a>
+        </div>
+
+        <button type="submit" class="btn-auth" id="loginBtn">
+          <span id="loginBtnText">Sign In</span>
+          <span id="loginBtnLoader" class="btn-loader" style="display:none;">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="30 10" opacity="0.5">
+                <animateTransform attributeName="transform" type="rotate" from="0 8 8" to="360 8 8" dur="1s" repeatCount="indefinite"/>
+              </circle>
+            </svg>
+          </span>
+        </button>
+
+        <div id="errorMessage" class="error-message" style="display:none;"></div>
+        <div id="successMessage" class="success-message" style="display:none;"></div>
+      </form>
+
+      <div class="auth-footer">
+        <p>Don't have an account? <a href="signup.html" class="link-primary">Sign up</a></p>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="/js-config/"></script>
+  <script src="auth.js"></script>
+</body>
+</html>

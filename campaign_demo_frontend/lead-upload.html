@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Upload Leads — Agent</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    body { padding: 40px; max-width: 720px; margin: 0 auto; }
+    .card {
+      background: var(--navy-2);
+      border: 1px solid var(--border);
+      border-radius: var(--r-lg);
+      padding: 28px;
+      margin-bottom: 24px;
+    }
+    .card h2 { color: var(--white-90); font-size: 18px; margin: 0 0 6px; }
+    .card p.hint { color: var(--slate); font-size: 13px; margin: 0 0 20px; }
+    label { display: block; color: var(--slate); font-size: 13px; margin: 16px 0 6px; }
+    input[type="file"], input[type="text"] {
+      width: 100%;
+      background: var(--navy-3);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--white-90);
+      padding: 10px 12px;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+    .drop-zone {
+      border: 1.5px dashed var(--border-m);
+      border-radius: var(--r-lg);
+      padding: 32px;
+      text-align: center;
+      color: var(--slate);
+      cursor: pointer;
+      transition: border-color .15s, background .15s;
+    }
+    .drop-zone.dragover { border-color: var(--green); background: rgba(16,185,129,0.06); }
+    .drop-zone strong { color: var(--white-90); }
+    .file-chip {
+      display: inline-flex; align-items: center; gap: 8px;
+      margin-top: 12px; padding: 6px 12px;
+      background: var(--navy-3); border: 1px solid var(--border);
+      border-radius: 20px; color: var(--white-90); font-size: 13px;
+    }
+    .btn-primary {
+      margin-top: 22px;
+      background: var(--green);
+      color: #06110c;
+      border: none;
+      border-radius: 8px;
+      padding: 11px 20px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .result-box {
+      margin-top: 20px;
+      padding: 16px;
+      border-radius: var(--r-lg);
+      border: 1px solid var(--border);
+      background: var(--navy-3);
+      display: none;
+    }
+    .result-box.error { border-color: var(--red); }
+    .result-stats { display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 10px; }
+    .result-stat { font-size: 13px; color: var(--slate); }
+    .result-stat b { display: block; font-size: 20px; color: var(--white-90); }
+    .err-list { max-height: 160px; overflow-y: auto; font-size: 12px; color: var(--slate); margin-top: 8px; }
+    .err-list div { padding: 3px 0; border-bottom: 1px solid var(--border); }
+    a.back-link { color: var(--slate); font-size: 13px; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="bg-grid"></div>
+
+  <a class="back-link" href="index.html">&larr; Back to app</a>
+  <h1 style="color: var(--white-90); margin: 16px 0 24px;">Upload Leads</h1>
+
+  <div class="card">
+    <h2>Import from Excel or CSV</h2>
+    <p class="hint">
+      File must include an <b>Email</b> column. Optional columns: First Name, Last Name,
+      Title, Company, LinkedIn, Phone, Industry, Location. Existing leads are matched and
+      updated by email; new leads are created with channel "upload".
+    </p>
+
+    <div class="drop-zone" id="dropZone">
+      <div>Drag a .csv or .xlsx file here, or <strong>click to browse</strong></div>
+      <input type="file" id="fileInput" accept=".csv,.xlsx" style="display:none;">
+      <div id="fileChipWrap"></div>
+    </div>
+
+    <label for="listName">Lead list name (optional — groups these leads together)</label>
+    <input type="text" id="listName" placeholder="e.g. Q1 Trade Show Contacts">
+
+    <br>
+    <button class="btn-primary" id="uploadBtn" disabled>Upload Leads</button>
+
+    <div class="result-box" id="resultBox"></div>
+  </div>
+
+  <script src="config.js"></script>
+  <script>
+    const SERVER_BASE_URL = (window.CONFIG && window.CONFIG.SERVER_URL) || 'http://localhost:8000';
+
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const fileChipWrap = document.getElementById('fileChipWrap');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const resultBox = document.getElementById('resultBox');
+    let selectedFile = null;
+
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+    dropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+      if (e.dataTransfer.files.length) setFile(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files.length) setFile(fileInput.files[0]);
+    });
+
+    function setFile(file) {
+      selectedFile = file;
+      fileChipWrap.innerHTML = `<div class="file-chip">📄 ${file.name}</div>`;
+      uploadBtn.disabled = false;
+      resultBox.style.display = 'none';
+    }
+
+    uploadBtn.addEventListener('click', async () => {
+      if (!selectedFile) return;
+
+      uploadBtn.disabled = true;
+      uploadBtn.textContent = 'Uploading…';
+      resultBox.style.display = 'none';
+
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+      const listName = document.getElementById('listName').value.trim();
+      if (listName) formData.append('lead_list_name', listName);
+
+      try {
+        const res = await fetch(`${SERVER_BASE_URL}/api/leads/upload/`, {
+          method: 'POST',
+          body: formData,
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          resultBox.className = 'result-box error';
+          resultBox.innerHTML = `<div style="color: var(--red);">${data.error || 'Upload failed'}</div>`;
+        } else {
+          resultBox.className = 'result-box';
+          let errHtml = '';
+          if (data.errors && data.errors.length) {
+            errHtml = '<div class="err-list">' + data.errors.slice(0, 50).map(
+              e => `<div>Row ${e.row}: ${e.reason}</div>`
+            ).join('') + (data.errors.length > 50 ? `<div>… and ${data.errors.length - 50} more</div>` : '') + '</div>';
+          }
+          resultBox.innerHTML = `
+            <div class="result-stats">
+              <div class="result-stat"><b>${data.imported}</b>Created</div>
+              <div class="result-stat"><b>${data.updated}</b>Updated</div>
+              <div class="result-stat"><b>${data.skipped}</b>Skipped</div>
+              <div class="result-stat"><b>${data.total_rows}</b>Total rows</div>
+            </div>
+            ${data.lead_list_name ? `<div style="color: var(--slate); font-size: 13px;">Added to lead list: <b style="color: var(--white-90);">${data.lead_list_name}</b></div>` : ''}
+            ${errHtml}
+          `;
+        }
+        resultBox.style.display = 'block';
+      } catch (e) {
+        resultBox.className = 'result-box error';
+        resultBox.innerHTML = `<div style="color: var(--red);">Network error: ${e.message}</div>`;
+        resultBox.style.display = 'block';
+      } finally {
+        uploadBtn.disabled = false;
+        uploadBtn.textContent = 'Upload Leads';
+      }
+    });
+  </script>
+</body>
+</html>

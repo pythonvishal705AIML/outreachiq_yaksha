@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lead Selection Demo</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    body {
+      padding: 40px;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    .demo-section {
+      margin-bottom: 40px;
+    }
+    .demo-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--white-90);
+      margin-bottom: 20px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-grid"></div>
+  
+  <h1 style="color: var(--white-90); margin-bottom: 40px;">Lead Selection UI Demo</h1>
+
+  <!-- Demo 1: Lead Results -->
+  <div class="demo-section">
+    <div class="demo-title">1. Lead Search Results</div>
+    <div class="lead-results">
+      <div class="lead-results-header">
+        <strong>Found 20 leads</strong>
+        <small>Search: abc-123-def-456</small>
+      </div>
+      <div class="lead-list">
+        <div class="lead-item">
+          <div class="lead-num">1</div>
+          <div class="lead-info">
+            <div class="lead-name">John Smith</div>
+            <div class="lead-title">CEO & Founder</div>
+            <div class="lead-company">Acme Corp</div>
+            <div class="lead-loc">📍 San Francisco, CA</div>
+          </div>
+          <div class="lead-score high" title="Lead score">87</div>
+        </div>
+        <div class="lead-item">
+          <div class="lead-num">2</div>
+          <div class="lead-info">
+            <div class="lead-name">Jane Doe</div>
+            <div class="lead-title">Chief Technology Officer</div>
+            <div class="lead-company">TechStart Inc</div>
+            <div class="lead-loc">📍 New York, NY</div>
+          </div>
+          <div class="lead-score high" title="Lead score">74</div>
+        </div>
+        <div class="lead-item">
+          <div class="lead-num">3</div>
+          <div class="lead-info">
+            <div class="lead-name">Adam Wilson</div>
+            <div class="lead-title">Cofounder & CEO</div>
+            <div class="lead-company">FinanceHub</div>
+            <div class="lead-loc">📍 Austin, TX</div>
+          </div>
+          <div class="lead-score mid" title="Lead score">58</div>
+        </div>
+        <div class="lead-item">
+          <div class="lead-num">4</div>
+          <div class="lead-info">
+            <div class="lead-name">Sarah Johnson</div>
+            <div class="lead-title">VP of Engineering</div>
+            <div class="lead-company">DataFlow Systems</div>
+            <div class="lead-loc">📍 Seattle, WA</div>
+          </div>
+          <div class="lead-score mid" title="Lead score">45</div>
+        </div>
+        <div class="lead-item">
+          <div class="lead-num">5</div>
+          <div class="lead-info">
+            <div class="lead-name">Michael Chen</div>
+            <div class="lead-title">Head of Product</div>
+            <div class="lead-company">CloudScale</div>
+            <div class="lead-loc">📍 Boston, MA</div>
+          </div>
+          <div class="lead-score low" title="Lead score">31</div>
+        </div>
+        <div class="lead-more">… and 15 more leads</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Demo 2: Lead Selection Panel -->
+  <div class="demo-section">
+    <div class="demo-title">2. Lead Selection Panel</div>
+    <div class="lead-selection-panel">
+      <div class="lead-sel-title">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style="vertical-align:middle;margin-right:6px;">
+          <path d="M8 1L15 5V11L8 15L1 11V5L8 1Z" stroke="currentColor" stroke-width="1.3" opacity="0.5"/>
+          <circle cx="8" cy="8" r="2.5" fill="currentColor" opacity="0.3"/>
+        </svg>
+        Select leads for your campaign
+      </div>
+      <div class="lead-sel-subtitle">Choose how many leads to include in this campaign</div>
+      <div class="lead-sel-options">
+        <button class="lead-sel-btn" onclick="selectDemo(this, 100, 20)">
+          <span class="sel-label">All leads</span>
+          <span class="sel-count">20 leads</span>
+        </button>
+        <button class="lead-sel-btn" onclick="selectDemo(this, 75, 15)">
+          <span class="sel-label">Top 75%</span>
+          <span class="sel-count">15 leads</span>
+        </button>
+        <button class="lead-sel-btn" onclick="selectDemo(this, 50, 10)">
+          <span class="sel-label">Top 50%</span>
+          <span class="sel-count">10 leads</span>
+        </button>
+        <button class="lead-sel-btn" onclick="selectDemo(this, 25, 5)">
+          <span class="sel-label">Top 25%</span>
+          <span class="sel-count">5 leads</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Demo 3: Selection States -->
+  <div class="demo-section">
+    <div class="demo-title">3. Button States</div>
+    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px;">
+      <div>
+        <p style="color: var(--slate); font-size: 12px; margin-bottom: 8px;">Default State</p>
+        <button class="lead-sel-btn">
+          <span class="sel-label">Top 50%</span>
+          <span class="sel-count">10 leads</span>
+        </button>
+      </div>
+      <div>
+        <p style="color: var(--slate); font-size: 12px; margin-bottom: 8px;">Selected State</p>
+        <button class="lead-sel-btn selected">
+          <span class="sel-label">Top 50%</span>
+          <span class="sel-count">10 leads</span>
+        </button>
+      </div>
+      <div>
+        <p style="color: var(--slate); font-size: 12px; margin-bottom: 8px;">Disabled State</p>
+        <button class="lead-sel-btn" disabled>
+          <span class="sel-label">Top 50%</span>
+          <span class="sel-count">10 leads</span>
+        </button>
+      </div>
+      <div>
+        <p style="color: var(--slate); font-size: 12px; margin-bottom: 8px;">Loading State</p>
+        <button class="lead-sel-btn selected" disabled>
+          <span class="sel-label">Selecting...</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Demo 4: Confirmation Message -->
+  <div class="demo-section">
+    <div class="demo-title">4. Confirmation Message</div>
+    <div id="confirmationArea" style="padding: 16px; background: var(--navy-3); border: 1px solid var(--border); border-radius: var(--r-lg); color: var(--white-90); display: none;">
+      <div style="font-size: 14px; margin-bottom: 8px;">
+        ✅ <span id="confirmText">Selected 10 leads (50%) — lead list created</span>
+      </div>
+      <div style="font-size: 13px; color: var(--slate);">
+        Great! Now let's build your campaign. What's the goal of this campaign?
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function selectDemo(btn, percent, count) {
+      // Remove selected class from all buttons
+      const panel = btn.closest('.lead-selection-panel');
+      panel.querySelectorAll('.lead-sel-btn').forEach(b => {
+        b.classList.remove('selected');
+        b.disabled = false;
+      });
+      
+      // Add selected class to clicked button
+      btn.classList.add('selected');
+      
+      // Show loading state
+      const originalHTML = btn.innerHTML;
+      btn.innerHTML = '<span class="sel-label">Selecting...</span>';
+      btn.disabled = true;
+      
+      // Simulate API call
+      setTimeout(() => {
+        // Show confirmation
+        const confirmArea = document.getElementById('confirmationArea');
+        const confirmText = document.getElementById('confirmText');
+        confirmText.textContent = `Selected ${count} leads (${percent}%) — lead list created`;
+        confirmArea.style.display = 'block';
+        
+        // Disable all buttons
+        panel.querySelectorAll('.lead-sel-btn').forEach(b => {
+          b.disabled = true;
+        });
+        
+        // Restore button text
+        btn.innerHTML = originalHTML;
+      }, 1000);
+    }
+  </script>
+</body>
+</html>

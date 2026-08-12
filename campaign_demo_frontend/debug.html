@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Debug Console</title>
+    <style>
+        body {
+            font-family: 'Courier New', monospace;
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #1e1e1e;
+            color: #d4d4d4;
+        }
+        .section {
+            background: #252526;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            border-left: 4px solid #007acc;
+        }
+        h2 {
+            color: #4ec9b0;
+            margin-top: 0;
+        }
+        button {
+            background: #007acc;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        button:hover {
+            background: #005a9e;
+        }
+        .output {
+            background: #1e1e1e;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 4px;
+            border: 1px solid #3c3c3c;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .success { color: #4ec9b0; }
+        .error { color: #f48771; }
+        .warning { color: #dcdcaa; }
+        .info { color: #9cdcfe; }
+    </style>
+</head>
+<body>
+    <h1>🔧 Campaign Demo Debug Console</h1>
+
+    <div class="section">
+        <h2>1. Configuration Check</h2>
+        <button onclick="checkConfig()">Check Config</button>
+        <div id="configOutput" class="output"></div>
+    </div>
+
+    <div class="section">
+        <h2>2. Backend Connection Test</h2>
+        <button onclick="testBackend()">Test Backend</button>
+        <div id="backendOutput" class="output"></div>
+    </div>
+
+    <div class="section">
+        <h2>3. Session Init Test</h2>
+        <button onclick="testInit()">Test Init</button>
+        <div id="initOutput" class="output"></div>
+    </div>
+
+    <div class="section">
+        <h2>4. Message Send Test</h2>
+        <input type="text" id="sessionIdInput" placeholder="Session ID from init test" style="width: 300px; padding: 8px; background: #1e1e1e; color: #d4d4d4; border: 1px solid #3c3c3c; border-radius: 4px;">
+        <button onclick="testMessage()">Test Message</button>
+        <div id="messageOutput" class="output"></div>
+    </div>
+
+    <div class="section">
+        <h2>5. Full Flow Test</h2>
+        <button onclick="testFullFlow()">Test Full Flow</button>
+        <div id="flowOutput" class="output"></div>
+    </div>
+
+    <script src="/js-config/"></script>
+    <script>
+        const API_BASE_URL = (window.CONFIG && window.CONFIG.API_BASE_URL) || 'http://localhost:8000/api/agent/v1';
+        const DEFAULT_TENANT_ID = '12b2abd641734cce805b1544105042a7';  // Lopes account
+
+        function log(elementId, message, type = 'info') {
+            const output = document.getElementById(elementId);
+            const timestamp = new Date().toLocaleTimeString();
+            const className = type;
+            output.innerHTML += `<span class="${className}">[${timestamp}] ${message}</span>\n`;
+            output.scrollTop = output.scrollHeight;
+        }
+
+        function clear(elementId) {
+            document.getElementById(elementId).innerHTML = '';
+        }
+
+        function checkConfig() {
+            clear('configOutput');
+            log('configOutput', '=== Configuration ===', 'info');
+            log('configOutput', `API_BASE_URL: ${API_BASE_URL}`, 'info');
+            log('configOutput', `DEFAULT_TENANT_ID: ${DEFAULT_TENANT_ID}`, 'info');
+            log('configOutput', `Current URL: ${window.location.href}`, 'info');
+            log('configOutput', `User Agent: ${navigator.userAgent}`, 'info');
+            log('configOutput', '\n✅ Configuration loaded', 'success');
+        }
+
+        async function testBackend() {
+            clear('backendOutput');
+            log('backendOutput', 'Testing backend connection...', 'info');
+            
+            try {
+                const response = await fetch(`${API_BASE_URL.replace('/api/agent/v1', '')}/admin/`, {
+                    method: 'GET',
+                    mode: 'no-cors'
+                });
+                log('backendOutput', '✅ Backend server is reachable', 'success');
+            } catch (error) {
+                log('backendOutput', `❌ Backend not reachable: ${error.message}`, 'error');
+                log('backendOutput', '\n💡 Make sure Django is running:', 'warning');
+                log('backendOutput', '   python manage.py runserver', 'warning');
+            }
+        }
+
+        async function testInit() {
+            clear('initOutput');
+            log('initOutput', 'Testing session initialization...', 'info');
+            log('initOutput', `POST ${API_BASE_URL}/conversation/init/`, 'info');
+            log('initOutput', `Body: ${JSON.stringify({ tenant_id: DEFAULT_TENANT_ID, text: '' }, null, 2)}`, 'info');
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/conversation/init/`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        tenant_id: DEFAULT_TENANT_ID,
+                        text: ''
+                    })
+                });
+
+                log('initOutput', `\nResponse Status: ${response.status} ${response.statusText}`, 
+                    response.ok ? 'success' : 'error');
+
+                const data = await response.json();
+                log('initOutput', `\nResponse Body:\n${JSON.stringify(data, null, 2)}`, 
+                    response.ok ? 'success' : 'error');
+
+                if (response.ok && data.session_id) {
+                    log('initOutput', `\n✅ Session created: ${data.session_id}`, 'success');
+                    document.getElementById('sessionIdInput').value = data.session_id;
+                } else {
+                    log('initOutput', '\n❌ Session creation failed', 'error');
+                }
+            } catch (error) {
+                log('initOutput', `\n❌ Error: ${error.message}`, 'error');
+                if (error.message.includes('Failed to fetch')) {
+                    log('initOutput', '\n💡 Possible issues:', 'warning');
+                    log('initOutput', '   1. Django server not running', 'warning');
+                    log('initOutput', '   2. CORS not configured', 'warning');
+                    log('initOutput', '   3. Wrong API URL', 'warning');
+                }
+            }
+        }
+
+        async function testMessage() {
+            clear('messageOutput');
+            const sessionId = document.getElementById('sessionIdInput').value.trim();
+            
+            if (!sessionId) {
+                log('messageOutput', '❌ Please run Init test first to get session ID', 'error');
+                return;
+            }
+
+            log('messageOutput', 'Testing message send...', 'info');
+            log('messageOutput', `POST ${API_BASE_URL}/conversation/message/`, 'info');
+            log('messageOutput', `Body: ${JSON.stringify({ session_id: sessionId, text: 'Hello' }, null, 2)}`, 'info');
+            
+            try {
+                const response = await fetch(`${API_BASE_URL}/conversation/message/`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        session_id: sessionId,
+                        text: 'Hello, I want to create a campaign'
+                    })
+                });
+
+                log('messageOutput', `\nResponse Status: ${response.status} ${response.statusText}`, 
+                    response.ok ? 'success' : 'error');
+
+                const data = await response.json();
+                log('messageOutput', `\nResponse Body:\n${JSON.stringify(data, null, 2)}`, 
+                    response.ok ? 'success' : 'error');
+
+                if (response.ok) {
+                    log('messageOutput', '\n✅ Message sent successfully', 'success');
+                    if (data.reply || data.text) {
+                        log('messageOutput', `\nBot Reply: ${data.reply || data.text}`, 'success');
+                    }
+                } else {
+                    log('messageOutput', '\n❌ Message send failed', 'error');
+                }
+            } catch (error) {
+                log('messageOutput', `\n❌ Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function testFullFlow() {
+            clear('flowOutput');
+            log('flowOutput', '=== Starting Full Flow Test ===\n', 'info');
+            
+            // Step 1: Init
+            log('flowOutput', 'Step 1: Initializing session...', 'info');
+            try {
+                const initResponse = await fetch(`${API_BASE_URL}/conversation/init/`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ tenant_id: DEFAULT_TENANT_ID, text: '' })
+                });
+
+                if (!initResponse.ok) {
+                    throw new Error(`Init failed: ${initResponse.status}`);
+                }
+
+                const initData = await initResponse.json();
+                log('flowOutput', `✅ Session created: ${initData.session_id}\n`, 'success');
+
+                // Step 2: Send message
+                log('flowOutput', 'Step 2: Sending message...', 'info');
+                const msgResponse = await fetch(`${API_BASE_URL}/conversation/message/`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: initData.session_id,
+                        text: 'I want to create a campaign'
+                    })
+                });
+
+                if (!msgResponse.ok) {
+                    throw new Error(`Message failed: ${msgResponse.status}`);
+                }
+
+                const msgData = await msgResponse.json();
+                log('flowOutput', `✅ Bot replied: ${msgData.reply || msgData.text}\n`, 'success');
+
+                // Step 3: Lead search
+                log('flowOutput', 'Step 3: Sending lead search request...', 'info');
+                const searchResponse = await fetch(`${API_BASE_URL}/conversation/message/`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: initData.session_id,
+                        text: 'Find CEOs in fintech from USA'
+                    })
+                });
+
+                if (!searchResponse.ok) {
+                    throw new Error(`Search request failed: ${searchResponse.status}`);
+                }
+
+                const searchData = await searchResponse.json();
+                log('flowOutput', `✅ Bot replied: ${searchData.reply || searchData.text}`, 'success');
+                
+                if (searchData.next_action) {
+                    log('flowOutput', `\n✅ Next action detected: ${searchData.next_action.endpoint}`, 'success');
+                }
+
+                log('flowOutput', '\n=== ✅ Full Flow Test Completed Successfully ===', 'success');
+
+            } catch (error) {
+                log('flowOutput', `\n❌ Flow test failed: ${error.message}`, 'error');
+                log('flowOutput', '\n💡 Check:', 'warning');
+                log('flowOutput', '   1. Django server running', 'warning');
+                log('flowOutput', '   2. Database connected', 'warning');
+                log('flowOutput', '   3. CORS configured', 'warning');
+                log('flowOutput', '   4. AGENT_RUNTIME_ENABLED = True', 'warning');
+            }
+        }
+
+        // Auto-run config check on load
+        window.addEventListener('DOMContentLoaded', () => {
+            checkConfig();
+        });
+    </script>
+</body>
+</html>
