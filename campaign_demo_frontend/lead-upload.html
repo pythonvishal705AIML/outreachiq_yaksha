@@ -108,7 +108,22 @@
   <script>
     const SERVER_BASE_URL = (window.CONFIG && window.CONFIG.SERVER_URL) || 'http://localhost:8000';
     const API_BASE_URL = (window.CONFIG && window.CONFIG.API_BASE_URL) || `${SERVER_BASE_URL}/api/agent/v1`;
+    const AUTH_BASE_URL = (window.CONFIG && window.CONFIG.AUTH_BASE_URL) || `${SERVER_BASE_URL}/api/auth`;
     const DEFAULT_TENANT_ID = '12b2abd641734cce805b1544105042a7';
+
+    // Single-user app — no login. This page may be opened directly (not via
+    // index.html), so make sure the real account_id is cached before it's needed.
+    const identityReady = fetch(`${AUTH_BASE_URL}/me/`)
+      .then(r => r.json())
+      .then(data => {
+        const user = data && data.user;
+        if (!user) return;
+        localStorage.setItem('user', JSON.stringify(user));
+        if (user.organization && user.organization.id) {
+          localStorage.setItem('account_id', user.organization.id);
+        }
+      })
+      .catch(() => {});
 
     function getAccountId() {
       const accountId = localStorage.getItem('account_id');
@@ -130,6 +145,7 @@
     async function ensureSession() {
       if (activeSessionId) return activeSessionId;
       sessionHint.textContent = 'Starting a new chat to attach these leads to…';
+      await identityReady;
       try {
         const res = await fetch(`${API_BASE_URL}/conversation/init/`, {
           method: 'POST',

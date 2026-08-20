@@ -1,10 +1,11 @@
+from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models
 
 
 class AgentConversationSession(models.Model):
     session_id = models.CharField(max_length=255, unique=True)
     tenant_id = models.CharField(max_length=255)
-    metadata = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True, encoder=DjangoJSONEncoder)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -22,7 +23,7 @@ class AgentConversationEvent(models.Model):
     seq_no = models.BigIntegerField(default=0)
     event_type = models.CharField(max_length=80)
     actor = models.CharField(max_length=30)
-    payload_json = models.JSONField(default=dict, blank=True)
+    payload_json = models.JSONField(default=dict, blank=True, encoder=DjangoJSONEncoder)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -39,7 +40,7 @@ class AgentConversationState(models.Model):
         related_name="state_row",
         on_delete=models.CASCADE,
     )
-    state_json = models.JSONField(default=dict, blank=True)
+    state_json = models.JSONField(default=dict, blank=True, encoder=DjangoJSONEncoder)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:

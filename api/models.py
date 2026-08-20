@@ -1,4 +1,5 @@
 # api/models.py
+from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models
 import uuid
 
@@ -6,7 +7,7 @@ class ConversationSession(models.Model):
     tenant_id = models.CharField(max_length=255, null=False)
     session_id = models.CharField(max_length=255, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    state = models.JSONField(default=dict)
+    state = models.JSONField(default=dict, encoder=DjangoJSONEncoder)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -24,7 +25,7 @@ class ConversationMessage(models.Model):
     )
     role = models.CharField(max_length=20)  # “user” or “assistant”
     text = models.TextField()
-    metadata = models.JSONField(default=dict, blank=True) # Snapshots (e.g., search params)
+    metadata = models.JSONField(default=dict, blank=True, encoder=DjangoJSONEncoder) # Snapshots (e.g., search params)
     timestamp = models.DateTimeField(auto_now_add=True)
 
     class Meta:
