@@ -4,7 +4,6 @@ from api.models import ConversationMessage, ConversationSession
 from api.services.main_service import APIService
 from agent_runtime.orchestrator.root_agent import RootOrchestratorAgent
 from agent_runtime.persistence.repository import AgentRepository
-from agent_runtime.tools.lead_source_router import LeadSourceRouter
 
 
 class TurnManager:
@@ -55,43 +54,6 @@ class TurnManager:
         AgentRepository.log_event(self.session_id, turn_id, "turn.completed", "system", {})
         result["reply"] = bot_text
         return result
-
-    def run_people_search(self, params: dict, channel: str | None = None, account_id: str | None = None) -> dict:
-        turn_id = str(uuid.uuid4())
-        if self.session_id:
-            AgentRepository.log_event(
-                self.session_id,
-                turn_id,
-                "source.selection.completed",
-                "system",
-                {"requested_channel": channel},
-            )
-        payload = LeadSourceRouter().search_people(
-            params=params,
-            preferred_source=channel,
-            session_id=self.session_id,
-            account_id=account_id,
-        )
-        if self.session_id:
-            AgentRepository.log_event(
-                self.session_id,
-                turn_id,
-                "source.query.executed",
-                "tool",
-                {"search_parameters": params, "provider": payload.get("provider_metadata", {}).get("provider")},
-            )
-            AgentRepository.log_event(
-                self.session_id,
-                turn_id,
-                "source.result.normalized",
-                "tool",
-                {
-                    "count": len(payload.get("people", [])),
-                    "search_run_id": str(payload.get("search_run_id") or ""),
-                    "lead_ids": [row.get("lead_id") for row in payload.get("people", []) if row.get("lead_id")],
-                },
-            )
-        return payload
 
     def run_message_turn_stream(self, user_text: str):
         """

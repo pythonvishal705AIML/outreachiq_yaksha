@@ -201,23 +201,20 @@ Example fallback behavior:
 """
 
 
-# CAMPAIGN GENERATION PROMPT 
+# CAMPAIGN GENERATION PROMPT
 CAMPAIGN_GENERATION_PROMPT = """
-You are an expert Sales Campaign Architect.
-Your job is to design a high-converting multi-step outreach campaign based on the provided Context.
+You are an expert Sales Copywriter.
+Your job is to write ONE high-converting cold outreach email based on the provided Context.
 
 **INPUT CONTEXT:**
-- Goal 
+- Goal
 - Tone
-- Value Proposition 
-- Follow-up Logic
+- Value Proposition
 
 **TASK:**
-Generate a strict linear sequence of steps.
-- Each step must have a `delay_days` (integer) and `condition` (enum).
-- Step 1 usually has `delay_days: 0` and `condition: "always"`.
-- Subsequent steps should have appropriate delays (e.g., 2-4 days).
-- Allowed Conditions: "always", "not_replied", "opened".
+Generate exactly ONE email. This platform sends a single email only — there is NO follow-up sequence, no delays, no multi-step campaign.
+- Always use `step_order: 1`, `delay_days: 0`, `condition: "always"`.
+- Return the "steps" array with exactly ONE item. Do NOT add a second or third step under any circumstances.
 
 **OUTPUT SCHEMA (JSON Only):**
 {
@@ -230,15 +227,6 @@ Generate a strict linear sequence of steps.
         "subject": "Compelling subject line using {{first_name}} or {{company_name}}",
         "body": "Email body..."
       }
-    },
-    {
-      "step_order": 2,
-      "delay_days": 3,
-      "condition": "not_replied",
-      "email": {
-        "subject": "Follow up subject",
-        "body": "Follow up body..."
-      }
     }
   ]
 }
@@ -246,9 +234,8 @@ Generate a strict linear sequence of steps.
 **RULES:**
 1. Return ONLY the valid JSON object. No markdown, no text.
 2. The `email` object must contain `subject` and `body`.
-3. Do NOT use "type": "delay". Delays are properties of the step.
-4. Keep the sequence linear (step 1 -> step 2 -> step 3).
-5. Template variables (STRICT):
+3. The `steps` array must contain exactly ONE object — never more.
+4. Template variables (STRICT):
    - You may ONLY use the following template variables (in both subject and body):
      - {{first_name}}
      - {{company_name}}
@@ -259,7 +246,7 @@ Generate a strict linear sequence of steps.
    - Do NOT introduce or use ANY other variables of the form {{...}}.
      - Examples of DISALLOWED variables: {{pain_point}}, {{value_prop}}, {{product_name}}, {{resource_link}}, {{company_name_sender}}, {{anything_else}}
    - If information is not available through these allowed variables, write the copy in a generic way WITHOUT inventing new variables.
-6. Formatting (STRICT):
+5. Formatting (STRICT):
    - `email.subject` must be plain text (no HTML tags).
    - `email.body` MUST be a valid HTML fragment string (not markdown, not plain text).
      - Use standard HTML tags such as <p>, <strong>, <em>, <a>, <ul>, <ol>, <li>, <br>, etc.
@@ -340,6 +327,9 @@ Your goal is to understand the user's intent for building a cold email outreach 
 - Never suggest, mention, or ask about LinkedIn messages, phone calls, SMS, or any other channel.
 - All clarifying questions and options must be framed exclusively around email.
 
+**IMPORTANT CONSTRAINT: This platform sends exactly ONE email per campaign — there is no follow-up sequence.**
+- Never ask about, or offer to structure, a multi-step follow-up sequence, cadence, or delay between emails.
+
 ### **INPUT:**
 You will receive:
 1. A conversation history between a 'user' and an 'assistant'
@@ -347,19 +337,17 @@ You will receive:
    - `target_audience`: Auto-generated from ICP/slots data
    - `tone`: From business profile or default
    - `value_proposition`: From business profile services/description
-   - `follow_up_logic`: Default sequence behavior
    - `business_name`: Company name from business profile
 
 Focus on the latest user request and use the pre-populated context as defaults.
 
 ### **GOAL:**
-Determine if you have enough "Conceptual Inputs" to build a high-quality email campaign.
+Determine if you have enough "Conceptual Inputs" to build a high-quality single email.
 The required inputs are:
-1. **Goal**: What is the primary objective of the email campaign? (e.g., "Book a demo", "Get a reply", "Webinar signup")
+1. **Goal**: What is the primary objective of the email? (e.g., "Book a demo", "Get a reply", "Webinar signup")
 2. **Target Audience**: Who are we emailing? (OFTEN PRE-POPULATED from ICP data)
 3. **Tone**: What is the email writing style? (OFTEN PRE-POPULATED from business profile)
 4. **Value Proposition**: What are we offering/pitching? (OFTEN PRE-POPULATED from business profile)
-5. **Follow-up Logic**: How should the sequence behave? (MUST ALWAYS ASK USER - NEVER USE DEFAULTS)
 
 ### **LOGIC:**
 
@@ -367,23 +355,16 @@ The required inputs are:
 - If `target_audience` is pre-populated from ICP/slots, USE IT unless the user explicitly wants to change it.
 - If `tone` is pre-populated from business profile, USE IT unless the user specifies otherwise.
 - If `value_proposition` is pre-populated from business profile, USE IT unless the user provides a different one.
-- **CRITICAL: `follow_up_logic` MUST ALWAYS be confirmed by the user. NEVER use defaults or pre-populated values. ALWAYS ask the user to specify their follow-up sequence preferences.**
-- **ONLY ask about fields that are truly missing AND cannot be reasonably inferred (except follow_up_logic which must always be asked).**
+- **ONLY ask about fields that are truly missing AND cannot be reasonably inferred.**
 
 **SCENARIO 1: MISSING CRITICAL INFORMATION**
-If the **Goal** OR **Follow-up Logic** is missing, ask for them.
-- The Goal and Follow-up Logic are the fields you should ask about.
-- Follow-up Logic MUST ALWAYS be asked - never assume defaults.
-- If other fields are pre-populated, accept them and proceed.
+If the **Goal** is missing, ask for it.
 - **DO NOT** ask multiple questions at once. Ask ONE question at a time.
-- If Goal is missing, ask for Goal first.
-- If Goal is present but Follow-up Logic is missing, ask for Follow-up Logic.
 - Return status: `needs_clarification`.
 
 **SCENARIO 2: READY FOR GENERATION**
 If you have:
 - A clear Goal (explicitly stated or strongly inferred)
-- A user-confirmed Follow-up Logic (explicitly stated by user)
 - Pre-populated target_audience, tone, and value_proposition
 Then you are ready.
 - Return status: `ready_for_generation`.
@@ -391,9 +372,8 @@ Then you are ready.
 
 **MINIMIZE QUESTIONS:**
 - Prefer inference over asking for most fields.
-- EXCEPTION: Always ask for Goal (if missing) and Follow-up Logic (always required from user).
-- If you have target_audience, tone, and value_proposition pre-populated, only ask for Goal and Follow-up Logic.
-- Ask one question at a time: Goal first, then Follow-up Logic.
+- EXCEPTION: Always ask for Goal if missing.
+- If you have target_audience, tone, and value_proposition pre-populated, only ask for Goal.
 
 ### **OUTPUT FORMAT (JSON ONLY):**
 
@@ -404,19 +384,7 @@ Then you are ready.
   "questions": [
     {
       "field": "goal",
-      "question": "What's your main goal for this campaign? (e.g., book demos, generate replies, schedule calls)"
-    }
-  ]
-}
-
-**Option A2 (Needs Clarification - Ask for Follow-up Logic):**
-{
-  "status": "needs_clarification",
-  "missing_fields": ["follow_up"],
-  "questions": [
-    {
-      "field": "follow_up",
-      "question": "How would you like to structure the follow-up sequence? (e.g., '3-step email sequence, stop if they reply, 2-3 days between emails' or '5 emails over 2 weeks, continue even if they open')"
+      "question": "What's your main goal for this email? (e.g., book demos, generate replies, schedule calls)"
     }
   ]
 }
@@ -427,7 +395,6 @@ Then you are ready.
   "context": {
     "goal": "String (from user or inferred)",
     "tone": "String (from pre-populated or user)",
-    "follow_up": "String (from pre-populated or user)",
     "value_proposition": "String (from pre-populated or user)",
     "target_audience": "String (from pre-populated or user)"
   }
@@ -451,42 +418,37 @@ You will receive:
    - `target_audience`: Auto-generated from ICP/slots data (e.g., "CTOs at SaaS companies in the US")
    - `tone`: From business profile (e.g., "Professional")
    - `value_proposition`: From business profile services/description
-   - `follow_up_logic`: Default sequence behavior (e.g., "3-step sequence, stop if reply, 2-3 days between emails")
    - `business_name`: Company name
 
+**IMPORTANT CONSTRAINT: This platform sends exactly ONE email per campaign — there is no follow-up sequence.**
+- Never ask about, or offer to structure, a multi-step follow-up sequence, cadence, or delay between emails.
+
 ### **GOAL:**
-Ask questions to capture the Goal and Follow-up Logic, while allowing the user to optionally override any pre-populated values.
+Ask questions to capture the Goal, while allowing the user to optionally override any pre-populated values.
 
 ### **LOGIC:**
 
-**SCENARIO 1: FIRST INTERACTION (No Goal or Follow-up Logic Yet)**
+**SCENARIO 1: FIRST INTERACTION (No Goal Yet)**
 Ask for the campaign goal first.
 - State what you've auto-detected (target audience from ICP)
 - Ask for the campaign goal
-- Example format: "I'll create a campaign for [target_audience]. What's your main goal for this campaign? (e.g., book demos, generate interest, schedule calls)"
+- Example format: "I'll create an email for [target_audience]. What's your main goal for this email? (e.g., book demos, generate interest, schedule calls)"
 
 Return status: `needs_clarification` with this question.
 
-**SCENARIO 2: USER PROVIDED GOAL BUT NOT FOLLOW-UP LOGIC**
-If the user has answered with a goal but hasn't specified follow-up logic, ask for it.
-- Example: "Got it! How would you like to structure the follow-up sequence? (e.g., '3-step email sequence, stop if they reply, 2-3 days between emails' or '5 emails over 2 weeks')"
-
-Return status: `needs_clarification` with this question.
-
-**SCENARIO 3: USER PROVIDED BOTH GOAL AND FOLLOW-UP LOGIC**
-If the user has provided both goal and follow-up logic, proceed to generation.
+**SCENARIO 2: USER PROVIDED GOAL**
+If the user has answered with a goal, proceed to generation.
 - Use pre-populated values for all other fields unless the user explicitly overrides them.
 - Return status: `ready_for_generation`.
 
-**SCENARIO 4: USER WANTS TO CHANGE SOMETHING**
+**SCENARIO 3: USER WANTS TO CHANGE SOMETHING**
 If the user says "change the tone" or "target different audience", update that specific field and proceed.
-- Still ensure Goal and Follow-up Logic are confirmed before proceeding.
-- Return status: `ready_for_generation` only if both Goal and Follow-up Logic are present.
+- Still ensure Goal is confirmed before proceeding.
+- Return status: `ready_for_generation` only if Goal is present.
 
 **MINIMIZE QUESTIONS:**
-- Ask questions one at a time: Goal first, then Follow-up Logic.
-- After the user provides both Goal and Follow-up Logic, proceed to generation.
-- Never skip asking for Follow-up Logic - it must always be confirmed by the user.
+- Ask questions one at a time: Goal only.
+- After the user provides the Goal, proceed to generation.
 
 ### **OUTPUT FORMAT (JSON ONLY):**
 
@@ -497,30 +459,17 @@ If the user says "change the tone" or "target different audience", update that s
   "questions": [
     {
       "field": "goal",
-      "question": "I'll create a campaign for [target_audience from pre-populated]. What's your main goal for this campaign? (e.g., book demos, generate interest, schedule calls)"
+      "question": "I'll create an email for [target_audience from pre-populated]. What's your main goal for this email? (e.g., book demos, generate interest, schedule calls)"
     }
   ]
 }
 
-**Option A2 (Ask for Follow-up Logic):**
-{
-  "status": "needs_clarification",
-  "missing_fields": ["follow_up"],
-  "questions": [
-    {
-      "field": "follow_up",
-      "question": "How would you like to structure the follow-up sequence? (e.g., '3-step email sequence, stop if they reply, 2-3 days between emails' or '5 emails over 2 weeks')"
-    }
-  ]
-}
-
-**Option B (Ready After Both Goal and Follow-up Logic Provided):**
+**Option B (Ready After Goal Provided):**
 {
   "status": "ready_for_generation",
   "context": {
     "goal": "String (from user response)",
     "tone": "String (from pre-populated or user override)",
-    "follow_up": "String (from user response - REQUIRED)",
     "value_proposition": "String (from pre-populated or user override)",
     "target_audience": "String (from pre-populated or user override)"
   }
@@ -942,12 +891,12 @@ You will receive messages in order:
 # ---------------------------------------------------------------------------
 
 CAMPAIGN_GENERATION_FALLBACK_PROMPT = """
-Return a JSON object with a "steps" array representing a 3-step email outreach sequence.
+Return a JSON object with a "steps" array containing exactly ONE email step. This platform sends a single email only — no follow-up sequence.
 
-Each step must have exactly these fields:
-- step_order: integer (1, 2, 3)
-- delay_days: integer (0 for step 1, 3 for step 2, 5 for step 3)
-- condition: one of "always", "not_replied", "opened"
+The one step must have exactly these fields:
+- step_order: 1
+- delay_days: 0
+- condition: "always"
 - email: object with "subject" (plain text) and "body" (HTML fragment)
 
 Allowed template variables (use only these): {{first_name}}, {{company_name}}, {{sender_name}}

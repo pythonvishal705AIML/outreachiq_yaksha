@@ -297,15 +297,22 @@ class Command(BaseCommand):
     def _get_sender(self, campaign):
         """
         Get the email sender service for a campaign.
-        Tries OAuth first, falls back to SMTP.
+        Tries the creator's connected Gmail OAuth account first, then their
+        Gmail App Password config, then falls back to the shared system SMTP account.
         Returns (service_instance, sender_email) or (None, None).
         """
-        # Try OAuth (per-user Gmail)
+        user = None
         if campaign.created_by:
             try:
                 from django.contrib.auth import get_user_model
                 User = get_user_model()
                 user = User.objects.get(id=campaign.created_by)
+            except Exception as e:
+                logger.warning(f"Could not resolve campaign creator for {campaign.id}: {e}")
+
+        # Try OAuth (per-user Gmail)
+        if user:
+            try:
                 from api.services.gmail_oauth_service import GmailOAuthService
                 oauth = GmailOAuthService(user)
                 if oauth.is_connected():
@@ -313,7 +320,23 @@ class Command(BaseCommand):
             except Exception as e:
                 logger.warning(f"OAuth sender setup failed for campaign {campaign.id}: {e}")
 
-        # Fallback to SMTP
+        # Try the creator's own Gmail App Password config
+        if user:
+            try:
+                from authentication.models import UserEmailConfig
+                from api.services.gmail_service import GmailService
+                cfg = UserEmailConfig.objects.get(user=user)
+                return GmailService(
+                    sender_email=cfg.from_email,
+                    app_password=cfg.app_password,
+                    smtp_host=cfg.smtp_host,
+                    smtp_port=cfg.smtp_port,
+                    from_name=cfg.from_name,
+                ), cfg.from_email
+            except Exception as e:
+                logger.warning(f"App Password sender setup failed for campaign {campaign.id}: {e}")
+
+        # Fallback to the shared system SMTP account
         try:
             from api.services.gmail_service import GmailService
             from django.conf import settings
@@ -342,22 +365,28 @@ class Command(BaseCommand):
         """Use a simple DB row as a lock. Returns True if acquired."""
         from django.db import connection
         threshold = timezone.now() - timedelta(minutes=LOCK_TIMEOUT_MINUTES)
+        id_col = "SERIAL PRIMARY KEY" if connection.vendor == "postgresql" else "INT PRIMARY KEY"
+        upsert = (
+            "INSERT INTO campaign_scheduler_lock (id) VALUES (1) ON CONFLICT (id) DO NOTHING"
+            if connection.vendor == "postgresql"
+            else "INSERT IGNORE INTO campaign_scheduler_lock (id) VALUES (1)"
+        )
         try:
             with connection.cursor() as cursor:
                 # Create lock table if not exists
-                cursor.execute("""
+                cursor.execute(f"""
                     CREATE TABLE IF NOT EXISTS campaign_scheduler_lock (
-                        id INT PRIMARY KEY DEFAULT 1,
+                        id {id_col} DEFAULT 1,
                         is_running BOOLEAN DEFAULT FALSE,
-                        started_at DATETIME NULL
+                        started_at TIMESTAMP NULL
                     )
                 """)
-                cursor.execute("INSERT IGNORE INTO campaign_scheduler_lock (id) VALUES (1)")
+                cursor.execute(upsert)
 
                 # Try to acquire
                 cursor.execute("""
-                    UPDATE campaign_scheduler_lock 
-                    SET is_running = TRUE, started_at = %s 
+                    UPDATE campaign_scheduler_lock
+                    SET is_running = TRUE, started_at = %s
                     WHERE id = 1 AND (is_running = FALSE OR started_at < %s)
                 """, [timezone.now(), threshold])
 

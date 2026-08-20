@@ -26,6 +26,7 @@ _HEADER_ALIASES = {
 }
 
 _MAX_ROWS = 5000
+_MAX_LEADS_IN_RESPONSE = 200
 
 
 def _normalize_header(raw: str) -> str:
@@ -107,11 +108,22 @@ def parse_lead_file(file_obj, filename: str):
     return records, []
 
 
-def import_leads(file_obj, filename: str, lead_list_name: str | None = None, owner_user_id: str | None = None) -> dict:
+def import_leads(
+    file_obj,
+    filename: str,
+    lead_list_name: str | None = None,
+    owner_user_id: str | None = None,
+    existing_lead_list_id: str | None = None,
+) -> dict:
     """
     Parses an uploaded Excel/CSV file and upserts rows into the Lead table
-    (channel="upload"), deduplicated on email. Optionally groups the
-    imported leads into a new LeadList.
+    (channel="upload"), deduplicated on email. Every import is grouped into
+    a LeadList so leads can always be found by lead_list_id later (e.g. when
+    a campaign sends to "the uploaded list").
+
+    If existing_lead_list_id is given, leads are appended to that list
+    (reused across repeat uploads in the same chat) instead of creating a
+    new one.
     """
     from ..models import Lead, LeadList
 
@@ -123,14 +135,19 @@ def import_leads(file_obj, filename: str, lead_list_name: str | None = None, own
         raise ValueError(f"File has {len(records)} rows; max {_MAX_ROWS} rows per upload.")
 
     lead_list = None
-    if lead_list_name:
-        lead_list = LeadList.objects.create(name=lead_list_name)
+    if existing_lead_list_id:
+        lead_list = LeadList.objects.filter(id=existing_lead_list_id).first()
+    if lead_list is None:
+        from django.utils import timezone
+        name = lead_list_name or f"Upload {timezone.now().strftime('%Y-%m-%d %H:%M')}"
+        lead_list = LeadList.objects.create(name=name)
 
     created_count = 0
     updated_count = 0
     skipped_count = 0
     row_errors = []
     seen_emails_in_file = set()
+    uploaded_leads = []
 
     for row_num, record in enumerate(records, start=2):  # +1 header, +1 to be 1-indexed
         email = (record.get("email") or "").strip().lower()
@@ -189,12 +206,24 @@ def import_leads(file_obj, filename: str, lead_list_name: str | None = None, own
         else:
             updated_count += 1
 
+        if len(uploaded_leads) < _MAX_LEADS_IN_RESPONSE:
+            uploaded_leads.append({
+                "id": lead.id,
+                "email": lead.email,
+                "first_name": lead.first_name or "",
+                "last_name": lead.last_name or "",
+                "company_name": lead.company_name or "",
+                "title": lead.title or "",
+            })
+
     result = {
         "imported": created_count,
         "updated": updated_count,
         "skipped": skipped_count,
         "errors": row_errors,
         "total_rows": len(records),
+        "leads": uploaded_leads,
+        "leads_truncated": (created_count + updated_count) > len(uploaded_leads),
     }
     if lead_list is not None:
         result["lead_list_id"] = lead_list.id

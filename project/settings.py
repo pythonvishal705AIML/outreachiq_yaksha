@@ -40,16 +40,22 @@ GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", f"{os.getenv('SERVER_URL'
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
-
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-&59j64&t&nq)wz%rxghyve546z(_^vb)b*q9w7x63f0qyahtdj'
+_DEV_ONLY_SECRET_KEY = 'django-insecure-&59j64&t&nq)wz%rxghyve546z(_^vb)b*q9w7x63f0qyahtdj'
+SECRET_KEY = os.getenv("SECRET_KEY", _DEV_ONLY_SECRET_KEY)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+# Matches the previous hardcoded default (False) unless overridden via env.
+DEBUG = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
 
-ALLOWED_HOSTS = ["*"]  # tighten later
+if not DEBUG and SECRET_KEY == _DEV_ONLY_SECRET_KEY:
+    raise RuntimeError(
+        "SECRET_KEY environment variable must be set when DEBUG=False."
+    )
+
+
+_default_hosts = "localhost,127.0.0.1,.onrender.com"
+ALLOWED_HOSTS = [h.strip() for h in os.getenv("ALLOWED_HOSTS", _default_hosts).split(",") if h.strip()]
 
 STATIC_ROOT = BASE_DIR / "staticfiles"
 AGENT_RUNTIME_ENABLED = True
@@ -73,12 +79,13 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'authentication.middleware.JWTAuthenticationMiddleware',  # JWT auth
+    'authentication.middleware.SingleUserMiddleware',  # attaches the default user — no login required
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -146,13 +153,38 @@ WSGI_APPLICATION = 'project.wsgi.application'
 
 
 
-# Local SQLite DB — no external connection required.
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+# If DATABASE_URL is set (production — e.g. Neon Postgres), use it.
+# Otherwise fall back to local SQLite for development — no external
+# connection required. OPTIONS below mitigate "database is locked" errors
+# under concurrent requests: WAL mode lets readers/writers coexist,
+# IMMEDIATE transactions fail fast on write conflicts instead of upgrading
+# mid-transaction, and timeout makes SQLite wait for a busy lock instead of
+# raising immediately.
+_database_url = os.getenv("DATABASE_URL")
+if _database_url:
+    import dj_database_url
+    _ssl_require = os.getenv("DATABASE_SSL_REQUIRE", "True") == "True"
+    DATABASES = {
+        'default': dj_database_url.parse(_database_url, conn_max_age=600, ssl_require=_ssl_require)
     }
-}
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+            'OPTIONS': {
+                'timeout': 20,
+                'transaction_mode': 'IMMEDIATE',
+                'init_command': (
+                    "PRAGMA journal_mode=WAL;"
+                    "PRAGMA synchronous=NORMAL;"
+                    "PRAGMA mmap_size=134217728;"
+                    "PRAGMA journal_size_limit=67108864;"
+                    "PRAGMA cache_size=2000;"
+                ),
+            },
+        }
+    }
 
 # Previous: Personal TiDB Cloud DB (remote — kept for reference, do not commit real creds)
 # DATABASES = {
@@ -212,6 +244,25 @@ STATICFILES_DIRS = [
     BASE_DIR / "campaign_demo_frontend",
 ]
 
+# WhiteNoise serves collected static files (e.g. Django admin CSS) directly
+# from the app process — no separate static host needed on a free-tier deploy.
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
+
+if not DEBUG:
+    SECURE_SSL_REDIRECT = os.getenv("SECURE_SSL_REDIRECT", "True") == "True"
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 60 * 60 * 24 * 7
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
@@ -219,6 +270,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # CORS settings
 _extra_cors = [SERVER_URL] if SERVER_URL not in ('http://localhost:8000', '') else []
+_env_cors = [o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()]
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:5173',
     'http://localhost:8000',
@@ -227,7 +279,16 @@ CORS_ALLOWED_ORIGINS = [
     'https://staging.squibb.ai',
     'https://test.dby989dgawwzr.amplifyapp.com',
     *_extra_cors,
+    *_env_cors,
 ]
+
+# CSRF: Django 4+ requires the scheme in trusted origins, and the deployed
+# backend serves the frontend itself (same-origin), so SERVER_URL covers it.
+CSRF_TRUSTED_ORIGINS = list({
+    SERVER_URL,
+    *(_env_cors or []),
+    'https://*.onrender.com',
+})
 
 # If you need a permissive temporary setting, set to True during troubleshooting:
 # CORS_ALLOW_ALL_ORIGINS = True

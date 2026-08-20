@@ -2,7 +2,6 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, Future
 from agent_runtime.agents.campaign_agent import CampaignAgent
 from agent_runtime.agents.chitchat_agent import ChitChatAgent
-from agent_runtime.agents.lead_search_agent import LeadSearchAgent
 from agent_runtime.orchestrator.intent_router_agent import IntentRouterAgent
 from agent_runtime.agent_logger import AgentLogger
 
@@ -16,17 +15,10 @@ class RootOrchestratorAgent:
     def __init__(self, session):
         self.session = session
         self.intent_router = IntentRouterAgent()
-        self._lead_agent = None
         self._campaign_agent = None
         self._chit_chat_agent = None
 
     # ── Lazy agent accessors ──────────────────────────────────────────────────
-
-    @property
-    def lead_agent(self) -> LeadSearchAgent:
-        if self._lead_agent is None:
-            self._lead_agent = LeadSearchAgent(self.session)
-        return self._lead_agent
 
     @property
     def campaign_agent(self) -> CampaignAgent:
@@ -44,17 +36,13 @@ class RootOrchestratorAgent:
 
     def _agent_for_intent(self, intent: str, active_flow: str):
         """Map intent + active flow to the right agent."""
-        if intent in ("chit_chat", "unknown"):
+        if intent in ("chit_chat", "unknown", "lead_search"):
             return self.chit_chat_agent
         if intent == "create_campaign":
             return self.campaign_agent
-        if intent == "lead_search":
-            return self.lead_agent
         # Fallback: resume active flow
         if active_flow == "campaign_flow":
             return self.campaign_agent
-        if active_flow == "lead_search":
-            return self.lead_agent
         return self.chit_chat_agent
 
     # ── Public turn handlers ──────────────────────────────────────────────────

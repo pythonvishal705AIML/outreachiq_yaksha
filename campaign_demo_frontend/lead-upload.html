@@ -96,15 +96,64 @@
     <label for="listName">Lead list name (optional — groups these leads together)</label>
     <input type="text" id="listName" placeholder="e.g. Q1 Trade Show Contacts">
 
+    <p class="hint" id="sessionHint"></p>
+
     <br>
     <button class="btn-primary" id="uploadBtn" disabled>Upload Leads</button>
 
     <div class="result-box" id="resultBox"></div>
   </div>
 
-  <script src="config.js"></script>
+  <script src="/js-config/"></script>
   <script>
     const SERVER_BASE_URL = (window.CONFIG && window.CONFIG.SERVER_URL) || 'http://localhost:8000';
+    const API_BASE_URL = (window.CONFIG && window.CONFIG.API_BASE_URL) || `${SERVER_BASE_URL}/api/agent/v1`;
+    const DEFAULT_TENANT_ID = '12b2abd641734cce805b1544105042a7';
+
+    function getAccountId() {
+      const accountId = localStorage.getItem('account_id');
+      if (accountId) return accountId;
+      try {
+        const user = JSON.parse(localStorage.getItem('user') || '{}');
+        if (user.organization && user.organization.id) return user.organization.id;
+        if (user.account_id) return user.account_id;
+      } catch (e) { }
+      return DEFAULT_TENANT_ID;
+    }
+
+    // Ensure a chat session exists before upload so these leads always end up
+    // linked to a campaign — reached via the sidebar, this page may be the
+    // very first thing opened, before any chat has started.
+    let activeSessionId = sessionStorage.getItem('currentSessionId');
+    const sessionHint = document.getElementById('sessionHint');
+
+    async function ensureSession() {
+      if (activeSessionId) return activeSessionId;
+      sessionHint.textContent = 'Starting a new chat to attach these leads to…';
+      try {
+        const res = await fetch(`${API_BASE_URL}/conversation/init/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tenant_id: getAccountId(), text: '' }),
+        });
+        const data = await res.json();
+        if (res.ok && data.session_id) {
+          activeSessionId = data.session_id;
+          sessionStorage.setItem('currentSessionId', activeSessionId);
+          sessionHint.textContent = 'These leads will be linked to a new chat, ready to send once the campaign is created.';
+        } else {
+          sessionHint.textContent = 'Could not start a chat session — leads will upload but won\'t auto-link to a campaign.';
+        }
+      } catch (e) {
+        sessionHint.textContent = 'Could not reach the server to start a chat session — leads will upload but won\'t auto-link to a campaign.';
+      }
+      return activeSessionId;
+    }
+
+    sessionHint.textContent = activeSessionId
+      ? 'These leads will be linked to your current chat, ready to send once the campaign is created.'
+      : 'Starting a new chat to attach these leads to…';
+    ensureSession();
 
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
@@ -139,10 +188,13 @@
       uploadBtn.textContent = 'Uploading…';
       resultBox.style.display = 'none';
 
+      const sessionIdForUpload = await ensureSession();
+
       const formData = new FormData();
       formData.append('file', selectedFile);
       const listName = document.getElementById('listName').value.trim();
       if (listName) formData.append('lead_list_name', listName);
+      if (sessionIdForUpload) formData.append('session_id', sessionIdForUpload);
 
       try {
         const res = await fetch(`${SERVER_BASE_URL}/api/leads/upload/`, {
@@ -154,26 +206,14 @@
         if (!res.ok) {
           resultBox.className = 'result-box error';
           resultBox.innerHTML = `<div style="color: var(--red);">${data.error || 'Upload failed'}</div>`;
+          resultBox.style.display = 'block';
         } else {
-          resultBox.className = 'result-box';
-          let errHtml = '';
-          if (data.errors && data.errors.length) {
-            errHtml = '<div class="err-list">' + data.errors.slice(0, 50).map(
-              e => `<div>Row ${e.row}: ${e.reason}</div>`
-            ).join('') + (data.errors.length > 50 ? `<div>… and ${data.errors.length - 50} more</div>` : '') + '</div>';
-          }
-          resultBox.innerHTML = `
-            <div class="result-stats">
-              <div class="result-stat"><b>${data.imported}</b>Created</div>
-              <div class="result-stat"><b>${data.updated}</b>Updated</div>
-              <div class="result-stat"><b>${data.skipped}</b>Skipped</div>
-              <div class="result-stat"><b>${data.total_rows}</b>Total rows</div>
-            </div>
-            ${data.lead_list_name ? `<div style="color: var(--slate); font-size: 13px;">Added to lead list: <b style="color: var(--white-90);">${data.lead_list_name}</b></div>` : ''}
-            ${errHtml}
-          `;
+          // Hand the result to the chat page and redirect there to show the leads.
+          sessionStorage.setItem('leadUploadResult', JSON.stringify(data));
+          uploadBtn.textContent = 'Done — opening chat…';
+          window.location.href = 'index.html';
+          return;
         }
-        resultBox.style.display = 'block';
       } catch (e) {
         resultBox.className = 'result-box error';
         resultBox.innerHTML = `<div style="color: var(--red);">Network error: ${e.message}</div>`;

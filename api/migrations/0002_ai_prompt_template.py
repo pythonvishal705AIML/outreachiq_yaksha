@@ -9,6 +9,10 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ('api', '0001_initial'),
+        # 'accounts' table is created by authentication's Organization model
+        # (managed there); api.Account is an unmanaged shadow of the same
+        # table, so this migration's FK to it must run after that table exists.
+        ('authentication', '0001_initial'),
     ]
 
     operations = [

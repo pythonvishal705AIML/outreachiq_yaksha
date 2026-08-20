@@ -44,19 +44,3 @@ class AgentConversationState(models.Model):
 
     class Meta:
         db_table = "agent_conversation_states"
-
-
-class AgentSourceExecutionAudit(models.Model):
-    session = models.ForeignKey(
-        AgentConversationSession,
-        related_name="source_audits",
-        on_delete=models.CASCADE,
-    )
-    provider = models.CharField(max_length=80)
-    request_payload = models.JSONField(default=dict, blank=True)
-    response_count = models.IntegerField(default=0)
-    status = models.CharField(max_length=20, default="completed")
-    created_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        db_table = "agent_source_execution_audits"

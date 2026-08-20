@@ -18,21 +18,11 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name='Organization',
             fields=[
-                ('id', models.CharField(max_length=32, primary_key=True, serialize=False)),
-                ('name', models.TextField()),
-                ('subdomain', models.TextField(blank=True, null=True)),
-                ('ghl_location_id', models.CharField(blank=True, max_length=255, null=True)),
-                ('ghl_status', models.CharField(blank=True, max_length=50, null=True)),
-                ('onboarding_complete', models.BooleanField(default=False)),
-                ('logo_url', models.CharField(blank=True, max_length=200, null=True)),
-                ('stripe_customer_id', models.CharField(blank=True, max_length=255, null=True)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('deleted_at', models.DateTimeField(blank=True, null=True)),
+                ('id', models.CharField(max_length=255, primary_key=True, serialize=False)),
+                ('name', models.CharField(blank=True, max_length=255, null=True)),
             ],
             options={
                 'db_table': 'accounts',
-                'managed': False,
             },
         ),
         migrations.CreateModel(

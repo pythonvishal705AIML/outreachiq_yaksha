@@ -33,7 +33,6 @@ class Organization(models.Model):
 
     class Meta:
         db_table = 'accounts'
-        managed = False
 
     def __str__(self):
         return f"{self.name} ({self.id})" if self.name else str(self.id)
@@ -212,7 +211,7 @@ class UserGmailToken(models.Model):
 
 
 class UserEmailConfig(models.Model):
-    """Per-user SMTP email config — simpler alternative to OAuth."""
+    """Per-user Gmail App Password config — simpler alternative to OAuth."""
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='email_config')
     from_email = models.EmailField()
     from_name = models.CharField(max_length=100, blank=True)

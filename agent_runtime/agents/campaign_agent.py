@@ -1,4 +1,4 @@
-from api.models import BusinessProfile, Campaign, CampaignContext, CampaignEmail, CampaignStep, LeadListNew
+from api.models import BusinessProfile, Campaign, CampaignContext, CampaignEmail, CampaignStep
 from api.services.campaign_service import CampaignService as APICampaignService
 from agent_runtime.services.campaign_service import CampaignService
 from agent_runtime.prompts import CAMPAIGN_BRAND_MANAGER_PROMPT
@@ -20,21 +20,9 @@ class CampaignAgent:
 
         # Generate campaign name from ICP slots
         slots = state.get("slots", {})
-        search_run_id = state.get("search_run_id")
-        
-        # If slots are empty, try to get them from search_run
-        if not slots and search_run_id:
-            try:
-                from api.models import SearchRun
-                search_run = SearchRun.objects.get(id=search_run_id)
-                if search_run.search_params:
-                    slots = search_run.search_params
-            except Exception:
-                pass
-        
         campaign_name = self._generate_campaign_name(slots)
 
-        # Use lead_list_id from session state (set by LeadSelectionService)
+        # Use lead_list_id from session state (set by the uploaded lead list)
         lead_list_id = state.get("lead_list_id")
         user_id = state.get("user_id")
 
@@ -51,7 +39,6 @@ class CampaignAgent:
 
         state["campaign_id"] = str(campaign.id)
         state["flow"] = "campaign_flow"
-        state["search_run_id"] = search_run_id  # Keep search_run_id in state for reference
         self.session.state = state
         self.session.save(update_fields=["state", "updated_at"])
         
@@ -236,7 +223,7 @@ class CampaignAgent:
         
         # Short summary for frontend reply field
         if campaign.name and len(steps_data) > 0:
-            short_reply = f"Campaign '{campaign.name}' with {len(steps_data)} email steps has been generated successfully and is ready for review."
+            short_reply = f"Campaign '{campaign.name}' has been generated successfully and is ready for review."
         else:
             short_reply = "Campaign created successfully."
 
@@ -400,7 +387,7 @@ class CampaignAgent:
         
         # Short summary for frontend reply field
         if campaign.name and len(steps_data) > 0:
-            short_reply = f"Campaign '{campaign.name}' with {len(steps_data)} email steps has been generated successfully and is ready for review."
+            short_reply = f"Campaign '{campaign.name}' has been generated successfully and is ready for review."
         else:
             short_reply = "Campaign created successfully."
 

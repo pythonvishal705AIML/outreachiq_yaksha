@@ -48,12 +48,20 @@ class GmailConnectView(APIView):
         # Embed a signed user ID in state to survive the unauthenticated callback
         state = signing.dumps(str(request.user.id), salt=_STATE_SALT)
         flow = _build_flow()
-        auth_url, _ = flow.authorization_url(
-            access_type="offline",
-            include_granted_scopes="true",
-            prompt="consent",
-            state=state,
-        )
+
+        auth_url_kwargs = {
+            "access_type": "offline",
+            "include_granted_scopes": "true",
+            "prompt": "consent",
+            "state": state,
+        }
+        # Optional: pre-fill/suggest which Google account to sign in with.
+        # This never stores or transmits a password — Google still handles auth.
+        login_hint = (request.query_params.get("login_hint") or "").strip()
+        if login_hint:
+            auth_url_kwargs["login_hint"] = login_hint
+
+        auth_url, _ = flow.authorization_url(**auth_url_kwargs)
         return Response({"auth_url": auth_url})
 
 
@@ -145,11 +153,11 @@ class GmailDisconnectView(APIView):
         return Response({"error": "Gmail was not connected"}, status=status.HTTP_404_NOT_FOUND)
 
 
-# ─── Simple SMTP Config (App Password) ──────────────────────────────────────
+# ─── Gmail App Password Config (name + gmail address + key) ────────────────
 
 @method_decorator(csrf_exempt, name='dispatch')
 class EmailConfigView(APIView):
-    """Save / get / delete the user's personal SMTP email config (App Password)."""
+    """Save / get / delete the user's Gmail App Password config."""
 
     def _get_user(self, request):
         """Return the authenticated user or None, checking both JWT middleware and Django auth."""
@@ -173,14 +181,12 @@ class EmailConfigView(APIView):
                 "configured": True,
                 "from_email": cfg.from_email,
                 "from_name": cfg.from_name,
-                "smtp_host": cfg.smtp_host,
-                "smtp_port": cfg.smtp_port,
             })
         except UserEmailConfig.DoesNotExist:
             return Response({"configured": False})
 
     def post(self, request):
-        """Save or update SMTP config. Sends a test email to verify credentials."""
+        """Save or update the Gmail App Password config. Sends a test email to verify credentials."""
         user = self._get_user(request)
         if not user:
             return Response({"error": "Authentication required"}, status=status.HTTP_401_UNAUTHORIZED)
@@ -188,33 +194,26 @@ class EmailConfigView(APIView):
         from_email = request.data.get("from_email", "").strip()
         app_password = request.data.get("app_password", "").strip()
         from_name = request.data.get("from_name", "").strip()
-        smtp_host = request.data.get("smtp_host", "smtp.gmail.com").strip()
-        smtp_port = int(request.data.get("smtp_port", 465))
+        smtp_host = "smtp.gmail.com"
+        smtp_port = 465
 
         if not from_email or not app_password:
-            return Response({"error": "from_email and app_password are required"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Gmail address and App Password (key) are required"}, status=status.HTTP_400_BAD_REQUEST)
 
         # Verify credentials by sending a test email to the user themselves
         import smtplib
         from email.mime.text import MIMEText
         try:
-            msg = MIMEText("Your email is configured correctly in OutreachIQ.")
-            msg["Subject"] = "OutreachIQ — Email config verified"
+            msg = MIMEText("Your Gmail sender is configured correctly in OutreachIQ.")
+            msg["Subject"] = "OutreachIQ — Gmail sender verified"
             msg["From"] = f"{from_name} <{from_email}>" if from_name else from_email
             msg["To"] = from_email
-            # Port 587 uses STARTTLS; all other ports (e.g. 465) use SSL
-            if smtp_port == 587:
-                server = smtplib.SMTP(smtp_host, smtp_port, timeout=15)
-                server.ehlo()
-                server.starttls()
-                server.ehlo()
-            else:
-                server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=15)
+            server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=15)
             server.login(from_email, app_password)
             server.sendmail(from_email, from_email, msg.as_string())
             server.quit()
         except smtplib.SMTPAuthenticationError:
-            return Response({"error": "Authentication failed. Check your email and App Password."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Authentication failed. Check your Gmail address and App Password (key)."}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as e:
             return Response({"error": f"Could not connect: {e}"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -230,7 +229,7 @@ class EmailConfigView(APIView):
             }
         )
         logger.info(f"EmailConfigView: saved config for {user.email} → {from_email}")
-        return Response({"success": True, "from_email": from_email, "message": "Email configured. Verification email sent."})
+        return Response({"success": True, "from_email": from_email, "message": "Gmail sender configured. Verification email sent."})
 
     def delete(self, request):
         user = self._get_user(request)

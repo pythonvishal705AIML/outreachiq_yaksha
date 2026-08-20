@@ -66,8 +66,6 @@ class Command(BaseCommand):
             MLGeneration,
             MLSpamAnalysis,
             SentEmail,
-            SpamValidationResult,
-            AISession,
         )
         from authentication.models import (
             LoginAttempt,
@@ -108,13 +106,11 @@ class Command(BaseCommand):
         _del("CampaignLeadStatuses",  CampaignLeadStatus.objects.filter(campaign_id__in=campaign_ids))
         _del("SentEmails",            SentEmail.objects.filter(campaign_id__in=[str(c) for c in campaign_ids]))
         _del("MLSpamAnalyses",        MLSpamAnalysis.objects.filter(email_id__in=email_ids))
-        _del("SpamValidationResults", SpamValidationResult.objects.filter(email_id__in=email_ids))
         _del("CampaignEmails",        CampaignEmail.objects.filter(step_id__in=step_ids))
         _del("MLGenerations",         MLGeneration.objects.filter(campaign_id__in=campaign_ids))
         _del("CampaignSteps",         CampaignStep.objects.filter(campaign_id__in=campaign_ids))
         _del("MLConversations",       MLConversation.objects.filter(campaign_id__in=campaign_ids))
         _del("MLCampaignContexts",    MLCampaignContext.objects.filter(campaign_id__in=campaign_ids))
-        _del("AISessions",            AISession.objects.filter(campaign_id__in=campaign_ids))
         _del("CampaignContexts",      CampaignContext.objects.filter(campaign_id__in=campaign_ids))
         _del("Campaigns",             Campaign.objects.filter(org_id=account_id))
 

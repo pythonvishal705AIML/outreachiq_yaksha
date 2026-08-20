@@ -32,10 +32,6 @@ function getUser() {
     return userStr ? JSON.parse(userStr) : null;
 }
 
-function getAccessToken() {
-    return localStorage.getItem('access_token');
-}
-
 function getAccountId() {
     const accountId = localStorage.getItem('account_id');
     if (accountId) return accountId;
@@ -50,44 +46,15 @@ function getAccountId() {
     return DEFAULT_TENANT_ID;
 }
 
-// Helper to get authenticated headers
+// Headers helper — kept for call-site compatibility; the app has no login,
+// so every request is just attributed to the single default account server-side.
 function getAuthHeaders() {
-    const headers = { 'Content-Type': 'application/json' };
-    const token = getAccessToken();
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    return headers;
+    return { 'Content-Type': 'application/json' };
 }
 
-// Auto-refresh wrapper — retries once after refreshing the token on 401
 async function apiFetch(url, options = {}) {
     options.headers = { ...getAuthHeaders(), ...(options.headers || {}) };
-    let res = await fetch(url, options);
-
-    if (res.status === 401) {
-        // Try to refresh the token, if we have one — account-bound endpoints
-        // (Gmail send, saved campaigns) still need a real login. The core
-        // agent chat does not require this and won't hit this branch.
-        const refreshToken = localStorage.getItem('refresh_token');
-        if (!refreshToken) { return res; }
-
-        const refreshRes = await fetch(AUTH_BASE_URL + '/refresh/', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ refresh_token: refreshToken })
-        });
-
-        if (refreshRes.ok) {
-            const data = await refreshRes.json();
-            localStorage.setItem('access_token', data.access_token);
-            // Retry original request with new token
-            options.headers['Authorization'] = `Bearer ${data.access_token}`;
-            res = await fetch(url, options);
-        } else {
-            // Refresh failed — clear the stale session, but stay on the page.
-            localStorage.clear();
-        }
-    }
-    return res;
+    return fetch(url, options);
 }
 
 // Update user info in UI
@@ -125,224 +92,50 @@ function updateUserUI() {
     }
 }
 
-// Login is not required to use the agent — direct access is allowed.
-// Account-bound features (Gmail send, saved campaigns) still prompt for
-// login individually where needed (see e.g. Gmail connect flow below).
-function checkAuth() {
-    return true;
-}
-
-// Logout function
-function handleLogout() {
-    if (confirm('Are you sure you want to logout?')) {
-        // Clear all session data
-        localStorage.clear();
-        sessionStorage.clear();
-
-        // Call backend logout API
-        const refreshToken = localStorage.getItem('refresh_token');
-        if (refreshToken) {
-            fetch(AUTH_BASE_URL + '/logout/', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    refresh_token: refreshToken
-                })
-            }).catch(err => console.log('Logout API error:', err));
-        }
-
-        // Redirect to login
-        window.location.href = 'login.html';
-    }
-}
-
-// ─── Gmail Connect / Status ─────────────────────────────────────────────────
+// ─── Gmail Sender Status (App Password) ─────────────────────────────────────
 
 async function checkGmailStatus() {
-    const token = getAccessToken();
-    if (!token) return;
-
     const pill = document.getElementById('gmailStatusPill');
     const label = document.getElementById('gmailStatusLabel');
     if (!pill || !label) return;
 
     try {
-        // Check App Password config first (highest priority)
-        const cfgRes = await apiFetch(`${AUTH_BASE_URL}/email-config/`, { headers: getAuthHeaders() });
-        const cfgData = await cfgRes.json();
-        if (cfgData.configured) {
-            updateGmailPillFromConfig(cfgData.from_email);
-            return;
-        }
-
-        // Fall back to OAuth status
-        const res = await apiFetch(`${AUTH_BASE_URL}/gmail/status/`, { headers: getAuthHeaders() });
+        const res = await apiFetch(`${AUTH_BASE_URL}/email-config/`, { headers: getAuthHeaders() });
         const data = await res.json();
 
-        if (data.connected) {
+        if (data.configured) {
             pill.className = 'gmail-pill gmail-connected';
-            label.textContent = data.gmail_address || 'Gmail Connected';
-            pill.title = `Sending from ${data.gmail_address} (OAuth). Click Settings to change.`;
-            pill.onclick = openEmailSettings;
+            label.textContent = data.from_email;
+            pill.title = `Sending from ${data.from_email}. Click Settings to change.`;
         } else {
             pill.className = 'gmail-pill gmail-disconnected';
             label.textContent = 'Set Sender Email';
-            pill.title = 'Click Settings to configure your email sender';
-            pill.onclick = openEmailSettings;
+            pill.title = 'Click Settings to configure your Gmail sender';
         }
+        pill.onclick = openEmailSettings;
     } catch (e) {
         console.log('Gmail status check failed:', e);
     }
 }
 
-async function handleGmailConnect() {
-    const token = getAccessToken();
-    if (!token) {
-        alert('Please log in first to connect your Gmail.');
-        return;
-    }
-    try {
-        const res = await apiFetch(`${AUTH_BASE_URL}/gmail/connect/`, {
-            headers: getAuthHeaders()
-        });
-        const data = await res.json();
-        if (data.auth_url) {
-            window.open(data.auth_url, '_blank', 'width=500,height=600');
-            // Re-check status after a delay to catch successful connection
-            setTimeout(checkGmailStatus, 5000);
-            setTimeout(checkGmailStatus, 12000);
-        }
-    } catch (e) {
-        console.error('Gmail connect failed:', e);
-    }
-}
-
-async function handleGmailDisconnect() {
-    if (!confirm('Disconnect your Gmail? Campaigns will fall back to the shared sender.')) return;
-    try {
-        await apiFetch(`${AUTH_BASE_URL}/gmail/disconnect/`, {
-            method: 'DELETE',
-            headers: getAuthHeaders()
-        });
-        checkGmailStatus();
-    } catch (e) {
-        console.error('Gmail disconnect failed:', e);
-    }
-}
-
-// ─── Email Settings (SMTP + OAuth tabs) ─────────────────────────────────────
-
-const EMAIL_PROVIDERS = {
-    gmail:   { host: 'smtp.gmail.com',        port: 465, hint: 'Use a Gmail App Password. <a href="https://myaccount.google.com/apppasswords" target="_blank" style="color:var(--blue)">Get one here →</a>' },
-    outlook: { host: 'smtp.office365.com',     port: 587, hint: 'Use your Microsoft account password or an App Password. Port 587 (STARTTLS) is used automatically.' },
-    yahoo:   { host: 'smtp.mail.yahoo.com',    port: 465, hint: 'Use a Yahoo App Password. Enable it in your Yahoo Account Security settings.' },
-    custom:  { host: '',                        port: 587, hint: 'Enter the SMTP host and port provided by your email provider.' },
-};
-
-function selectEmailProvider(provider) {
-    const preset = EMAIL_PROVIDERS[provider];
-    if (!preset) return;
-
-    document.getElementById('cfgSmtpHost').value = preset.host;
-    document.getElementById('cfgSmtpPort').value = preset.port;
-    document.getElementById('cfgProviderHint').innerHTML = preset.hint;
-
-    document.querySelectorAll('.provider-btn').forEach(b => b.classList.remove('provider-btn-active'));
-    const btn = document.getElementById(`provider-${provider}`);
-    if (btn) btn.classList.add('provider-btn-active');
-
-    // Update placeholder to match provider
-    const emailInput = document.getElementById('cfgFromEmail');
-    const placeholders = { gmail: 'you@gmail.com', outlook: 'you@outlook.com', yahoo: 'you@yahoo.com', custom: 'you@yourcompany.com' };
-    emailInput.placeholder = placeholders[provider] || 'you@yourcompany.com';
-}
-
-function switchEmailTab(tab) {
-    const isSmtp  = tab === 'smtp';
-    const isGmail = tab === 'oauth';
-
-    document.getElementById('smtpSection').style.display       = isSmtp  ? 'block' : 'none';
-    document.getElementById('oauthSection').style.display      = isGmail ? 'block' : 'none';
-    document.getElementById('smtpModalFooter').style.display   = isSmtp  ? 'flex'  : 'none';
-    document.getElementById('gmailModalFooter').style.display  = isGmail ? 'flex'  : 'none';
-
-    document.getElementById('optionCardSmtp').classList.toggle('email-option-card-active', isSmtp);
-    document.getElementById('optionCardOauth').classList.toggle('email-option-card-active', isGmail);
-
-    // Default provider when opening SMTP with no host set
-    if (isSmtp && !document.getElementById('cfgSmtpHost').value) {
-        selectEmailProvider('outlook');
-    }
-}
-
+// ─── Email Settings (Gmail App Password: name, gmail, key) ─────────────────
 
 async function openEmailSettings() {
     document.getElementById('emailSettingsModal').style.display = 'flex';
 
-    // Start hidden — will auto-select the right tab once data loads
-    document.getElementById('smtpSection').style.display  = 'none';
-    document.getElementById('oauthSection').style.display = 'none';
-    document.getElementById('smtpModalFooter').style.display = 'none';
-    document.getElementById('optionCardSmtp').classList.remove('email-option-card-active');
-    document.getElementById('optionCardOauth').classList.remove('email-option-card-active');
-
-    let smtpConfigured = false;
-    let oauthConnected = false;
-    let gmailConnected = false;
-
-    // Load saved SMTP / App Password config
     try {
         const res = await apiFetch(`${AUTH_BASE_URL}/email-config/`, { headers: getAuthHeaders() });
         const data = await res.json();
         if (data.configured) {
-            const isGmailHost = (data.smtp_host || '').includes('gmail.com');
-            if (isGmailHost) {
-                // Saved config is Gmail App Password — pre-fill Gmail section
-                gmailConnected = true;
-                document.getElementById('gmailFromEmail').value  = data.from_email || '';
-                document.getElementById('gmailFromName').value   = data.from_name  || '';
-                document.getElementById('gmailRemoveBtn').style.display = 'inline-flex';
-                document.getElementById('oauthCardBadge').style.display = 'block';
-                document.getElementById('oauthCardBadge').textContent   = data.from_email;
-            } else {
-                // Saved config is another SMTP provider — pre-fill SMTP section
-                smtpConfigured = true;
-                document.getElementById('cfgFromEmail').value = data.from_email || '';
-                document.getElementById('cfgFromName').value  = data.from_name  || '';
-                document.getElementById('cfgSmtpHost').value  = data.smtp_host  || '';
-                document.getElementById('cfgSmtpPort').value  = data.smtp_port  || 587;
-                document.getElementById('cfgRemoveBtn').style.display = 'inline-flex';
-                document.getElementById('smtpCardBadge').style.display = 'block';
-                document.getElementById('smtpCardBadge').textContent   = data.from_email;
-                _autoSelectProvider(data.smtp_host, data.smtp_port);
-            }
+            document.getElementById('cfgFromEmail').value = data.from_email || '';
+            document.getElementById('cfgFromName').value  = data.from_name  || '';
+            document.getElementById('cfgRemoveBtn').style.display = 'inline-flex';
+        } else {
+            document.getElementById('cfgRemoveBtn').style.display = 'none';
         }
-    } catch (e) { console.log('Could not load email config', e); }
-
-    // Auto-open the relevant section
-    if (smtpConfigured) {
-        switchEmailTab('smtp');
-    } else if (gmailConnected) {
-        switchEmailTab('oauth');
-    } else {
-        switchEmailTab('oauth'); // default: Gmail tab
+    } catch (e) {
+        console.log('Could not load email config', e);
     }
-}
-
-function _autoSelectProvider(host, port) {
-    const hostMap = {
-        'smtp.gmail.com':      'gmail',
-        'smtp.office365.com':  'outlook',
-        'smtp.live.com':       'outlook',
-        'smtp.mail.yahoo.com': 'yahoo',
-    };
-    const provider = hostMap[host] || 'custom';
-    selectEmailProvider(provider);
-    // Re-apply actual saved values (preset may have overwritten them)
-    if (host) document.getElementById('cfgSmtpHost').value = host;
-    if (port) document.getElementById('cfgSmtpPort').value = port;
 }
 
 function closeEmailSettings() {
@@ -361,11 +154,9 @@ async function saveEmailConfig() {
     const fromEmail = document.getElementById('cfgFromEmail').value.trim();
     const appPassword = document.getElementById('cfgAppPassword').value.trim();
     const fromName = document.getElementById('cfgFromName').value.trim();
-    const smtpHost = document.getElementById('cfgSmtpHost').value.trim() || 'smtp.gmail.com';
-    const smtpPort = parseInt(document.getElementById('cfgSmtpPort').value) || 465;
 
     if (!fromEmail || !appPassword) {
-        showConfigStatus('Email address and App Password are required.', 'error');
+        showConfigStatus('Gmail address and App Password (key) are required.', 'error');
         return;
     }
 
@@ -374,13 +165,13 @@ async function saveEmailConfig() {
         const res = await apiFetch(`${AUTH_BASE_URL}/email-config/`, {
             method: 'POST',
             headers: getAuthHeaders(),
-            body: JSON.stringify({ from_email: fromEmail, app_password: appPassword, from_name: fromName, smtp_host: smtpHost, smtp_port: smtpPort })
+            body: JSON.stringify({ from_email: fromEmail, app_password: appPassword, from_name: fromName })
         });
         const data = await res.json();
         if (res.ok && data.success) {
             showConfigStatus(`Saved! Campaigns will now send from ${data.from_email}`, 'success');
             document.getElementById('cfgRemoveBtn').style.display = 'inline-flex';
-            updateGmailPillFromConfig(data.from_email);
+            checkGmailStatus();
         } else {
             showConfigStatus(data.error || 'Failed to save.', 'error');
         }
@@ -389,89 +180,31 @@ async function saveEmailConfig() {
     }
 }
 
-async function saveGmailConfig() {
-    const fromEmail   = document.getElementById('gmailFromEmail').value.trim();
-    const appPassword = document.getElementById('gmailAppPassword').value.trim();
-    const fromName    = document.getElementById('gmailFromName').value.trim();
-
-    if (!fromEmail || !appPassword) {
-        _showGmailStatus('Gmail address and App Password are required.', 'error');
-        return;
-    }
-    _showGmailStatus('Verifying credentials…', 'success');
-    try {
-        const res = await apiFetch(`${AUTH_BASE_URL}/email-config/`, {
-            method: 'POST',
-            headers: getAuthHeaders(),
-            body: JSON.stringify({ from_email: fromEmail, app_password: appPassword, from_name: fromName, smtp_host: 'smtp.gmail.com', smtp_port: 465 })
-        });
-        const data = await res.json();
-        if (res.ok && data.success) {
-            _showGmailStatus(`Saved! Sending from ${data.from_email}`, 'success');
-            document.getElementById('gmailRemoveBtn').style.display = 'inline-flex';
-            updateGmailPillFromConfig(data.from_email);
-        } else {
-            _showGmailStatus(data.error || 'Failed to save.', 'error');
-        }
-    } catch (e) {
-        _showGmailStatus('Request failed. Is the server running?', 'error');
-    }
-}
-
-function _showGmailStatus(msg, type) {
-    const el = document.getElementById('gmailConfigStatus');
-    if (!el) return;
-    el.style.display = 'block';
-    el.style.color = type === 'success' ? '#10b981' : '#ef4444';
-    el.textContent = msg;
-}
-
 async function removeEmailConfig() {
-    if (!confirm('Remove your email config? Campaigns will use the shared account.')) return;
+    if (!confirm('Remove your Gmail sender config?')) return;
     await apiFetch(`${AUTH_BASE_URL}/email-config/`, { method: 'DELETE', headers: getAuthHeaders() });
-    // Clear both forms
-    document.getElementById('cfgRemoveBtn').style.display   = 'none';
-    document.getElementById('gmailRemoveBtn').style.display = 'none';
-    document.getElementById('cfgFromEmail').value    = '';
-    document.getElementById('cfgAppPassword').value  = '';
-    document.getElementById('gmailFromEmail').value  = '';
-    document.getElementById('gmailAppPassword').value = '';
-    document.getElementById('smtpCardBadge').style.display  = 'none';
-    document.getElementById('oauthCardBadge').style.display = 'none';
+    document.getElementById('cfgRemoveBtn').style.display = 'none';
+    document.getElementById('cfgFromEmail').value = '';
+    document.getElementById('cfgAppPassword').value = '';
+    document.getElementById('cfgFromName').value = '';
     showConfigStatus('Removed.', 'success');
     checkGmailStatus();
 }
 
-function updateGmailPillFromConfig(email) {
-    const pill = document.getElementById('gmailStatusPill');
-    const label = document.getElementById('gmailStatusLabel');
-    if (!pill || !label) return;
-    pill.className = 'gmail-pill gmail-connected';
-    label.textContent = email;
-    pill.title = `Sending from ${email} (App Password). Click Settings to change.`;
-    pill.onclick = openEmailSettings;
-}
-
-// Initialize authentication
-if (!checkAuth()) {
-    // Will redirect to login
-} else {
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => {
-            updateUserUI();
-            checkGmailStatus();
-        });
-    } else {
+// Initialize the single-account UI state (no login required)
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
         updateUserUI();
         checkGmailStatus();
-    }
+    });
+} else {
+    updateUserUI();
+    checkGmailStatus();
 }
 
 // State management
 let sessionId = null;
 let isProcessing = false;
-let lastSearchRunId = null;
-let lastLeadCount = 0;
 
 // DOM elements
 const chatContainer = document.getElementById('chatContainer');
@@ -516,6 +249,7 @@ async function initializeConversation() {
 
         const data = await response.json();
         sessionId = data.session_id;
+        sessionStorage.setItem('currentSessionId', sessionId);
 
         // Hide start button, show input area
         startBtn.style.display = 'none';
@@ -554,9 +288,8 @@ async function startNewCampaign() {
 
     // Reset all state variables
     sessionId = null;
+    sessionStorage.removeItem('currentSessionId');
     isProcessing = false;
-    lastSearchRunId = null;
-    lastLeadCount = 0;
 
     // Clear chat and restore welcome block
     chatContainer.innerHTML = `
@@ -633,35 +366,6 @@ async function sendMessage() {
             addBotMessage(data.message);
         }
 
-        // Persist search_run_id if returned in conversation response
-        if (data.search_run_id) {
-            lastSearchRunId = data.search_run_id;
-        }
-
-        // Check if we need to trigger lead search automatically
-        // Use .includes() for flexible endpoint matching
-        if (data.next_action && data.next_action.endpoint &&
-            data.next_action.endpoint.includes('leads/search/people')) {
-            await handleLeadSearch(data.slots || data.parameters || data.search_parameters);
-        }
-
-        // Check if response contains lead data and show selection panel
-        if (data.people && data.people.length > 0) {
-            displayLeadResults(data);
-        }
-
-        // Fallback: if agent mentions found leads but selection panel not shown
-        const responseText = data.text || data.reply || data.message || '';
-        if (responseText.toLowerCase().includes('found') &&
-            responseText.toLowerCase().includes('lead') &&
-            lastSearchRunId &&
-            lastLeadCount > 0 &&
-            !document.getElementById('leadSelectionMsg')) {
-            // Agent found leads but didn't trigger displayLeadResults
-            // Show selection panel manually
-            setTimeout(() => displayLeadSelectionPanel(lastLeadCount), 500);
-        }
-
         // Check if campaign is complete and show details
         if (data.campaign_id && (data.sequence_list || data.campaign_created)) {
             addSystemMessage('✅ Campaign created successfully!');
@@ -703,300 +407,6 @@ async function sendMessage() {
         sendBtn.disabled = false;
         messageInput.focus();
     }
-}
-
-// Handle automatic lead search
-async function handleLeadSearch(params) {
-    updateStatus('Searching for leads...', 'active');
-    addSystemMessage('🔍 Searching for leads based on your criteria...');
-
-    try {
-        const response = await apiFetch(`${API_BASE_URL}/leads/search/people/`, {
-            method: 'POST',
-            headers: getAuthHeaders(),
-            body: JSON.stringify({
-                session_id: sessionId,
-                params: params || {},
-                page: 1,
-                per_page: 10
-            })
-        });
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const data = await response.json();
-
-        // Store search_run_id at this level as safeguard
-        // (displayLeadResults also stores it, but may return early if no people)
-        if (data.search_run_id) {
-            lastSearchRunId = data.search_run_id;
-        }
-        if (data.total_entries) {
-            lastLeadCount = data.total_entries;
-        }
-
-        // Display lead results with inline selection buttons
-        displayLeadResults(data);
-
-        updateStatus('Lead search completed', 'active');
-
-    } catch (error) {
-        console.error('Error searching leads:', error);
-        addSystemMessage('❌ Failed to search leads. Please try again.');
-        updateStatus('Search failed', 'error');
-    }
-}
-
-// Display lead search results
-function displayLeadResults(data) {
-    const people = data.people || [];
-    // Search results return total_entries at top-level, not inside pagination
-    const totalCount = data.total_entries || data.pagination?.total_entries || data.pagination?.total || people.length;
-
-    if (people.length === 0) {
-        addSystemMessage('No leads found matching your criteria.');
-        return;
-    }
-
-    // Store for lead selection step
-    lastSearchRunId = data.search_run_id || null;
-    lastLeadCount = totalCount;
-
-    // Build lead list rows
-    let leadRows = '';
-    people.slice(0, 5).forEach((person, index) => {
-        let fullName = 'N/A';
-        if (person.name) {
-            fullName = person.name;
-        } else if (person.full_name) {
-            fullName = person.full_name;
-        } else if (person.first_name || person.last_name) {
-            fullName = [person.first_name, person.last_name].filter(Boolean).join(' ');
-        }
-        const title = person.title || person.job_title || person.headline || 'N/A';
-        const company = person.company || person.organization_name || person.company_name || 'N/A';
-        const location = person.location || person.city || person.state || person.country || '';
-        const score = person.score != null ? person.score : null;
-        const scoreTier = score == null ? '' : score >= 70 ? 'high' : score >= 40 ? 'mid' : 'low';
-
-        leadRows += `
-            <div class="lead-item">
-                <div class="lead-num">${index + 1}</div>
-                <div class="lead-info">
-                    <div class="lead-name">${escapeHtml(fullName)}</div>
-                    <div class="lead-title">${escapeHtml(title)}</div>
-                    <div class="lead-company">${escapeHtml(company)}</div>
-                    ${location ? `<div class="lead-loc">📍 ${escapeHtml(location)}</div>` : ''}
-                </div>
-                ${score != null ? `<div class="lead-score ${scoreTier}" title="Lead score">${score}</div>` : ''}
-            </div>`;
-    });
-
-    if (people.length > 5) {
-        leadRows += `<div class="lead-more">… and ${people.length - 5} more leads</div>`;
-    }
-
-    // Build selection buttons (embedded in same card — no separate message / no setTimeout)
-    const selOptions = [
-        { label: 'All leads', percent: 100, count: totalCount },
-        { label: 'Top 75%', percent: 75, count: Math.ceil(totalCount * 0.75) },
-        { label: 'Top 50%', percent: 50, count: Math.ceil(totalCount * 0.50) },
-        { label: 'Top 25%', percent: 25, count: Math.ceil(totalCount * 0.25) },
-    ];
-
-    const selButtons = selOptions.map(o => `
-        <button class="lead-sel-btn" onclick="handleLeadSelection(${o.percent}, this)">
-            <span class="sel-label">${o.label}</span>
-            <span class="sel-count">${o.count} ${o.count === 1 ? 'lead' : 'leads'}</span>
-        </button>`).join('');
-
-    const html = `
-        <div class="lead-results">
-            <div class="lead-results-header">
-                <strong>Found ${totalCount} leads</strong>
-                ${data.search_run_id ? `<small>Search: ${data.search_run_id.slice(0, 8)}…</small>` : ''}
-            </div>
-            <div class="lead-list">${leadRows}</div>
-            <div class="lead-selection-panel" id="leadSelectionMsg">
-                <div class="lead-sel-title">Select leads to include in your campaign</div>
-                <div class="lead-sel-options">${selButtons}</div>
-            </div>
-        </div>`;
-
-    const messageDiv = document.createElement('div');
-    messageDiv.className = 'message bot';
-    messageDiv.innerHTML = `
-        <div class="msg-avatar bot-av">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1L13 4.5V9.5L7 13L1 9.5V4.5L7 1Z" stroke="currentColor" stroke-width="1.3"/><circle cx="7" cy="7" r="2" fill="currentColor" opacity="0.5"/></svg>
-        </div>
-        <div class="msg-bubble" style="max-width:100%;padding:0;background:transparent;border:none;">${html}</div>`;
-    chatContainer.appendChild(messageDiv);
-    scrollToBottom();
-}
-
-// Show lead selection panel after leads are found
-function displayLeadSelectionPanel(totalCount) {
-    console.log('displayLeadSelectionPanel called with totalCount:', totalCount);
-    console.log('lastSearchRunId:', lastSearchRunId);
-    console.log('sessionId:', sessionId);
-
-    // Remove any existing selection panel first
-    const existingPanel = document.getElementById('leadSelectionMsg');
-    if (existingPanel) {
-        console.log('Removing existing panel');
-        existingPanel.remove();
-    }
-
-    const options = [
-        { label: 'All leads', percent: 100, count: totalCount },
-        { label: 'Top 75%', percent: 75, count: Math.ceil(totalCount * 0.75) },
-        { label: 'Top 50%', percent: 50, count: Math.ceil(totalCount * 0.50) },
-        { label: 'Top 25%', percent: 25, count: Math.ceil(totalCount * 0.25) },
-    ];
-
-    const html = `
-        <div class="lead-selection-panel">
-            <div class="lead-sel-title">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style="vertical-align:middle;margin-right:6px;">
-                    <path d="M8 1L15 5V11L8 15L1 11V5L8 1Z" stroke="currentColor" stroke-width="1.3" opacity="0.5"/>
-                    <circle cx="8" cy="8" r="2.5" fill="currentColor" opacity="0.3"/>
-                </svg>
-                Select leads for your campaign
-            </div>
-            <div class="lead-sel-subtitle">Choose how many leads to include in this campaign</div>
-            <div class="lead-sel-options">
-                ${options.map(o => `
-                    <button class="lead-sel-btn" onclick="handleLeadSelection(${o.percent}, this)">
-                        <span class="sel-label">${o.label}</span>
-                        <span class="sel-count">${o.count} ${o.count === 1 ? 'lead' : 'leads'}</span>
-                    </button>`).join('')}
-            </div>
-        </div>`;
-
-    const msgDiv = document.createElement('div');
-    msgDiv.className = 'message bot';
-    msgDiv.id = 'leadSelectionMsg';
-    msgDiv.innerHTML = `
-        <div class="msg-avatar bot-av">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1L13 4.5V9.5L7 13L1 9.5V4.5L7 1Z" stroke="currentColor" stroke-width="1.3"/><circle cx="7" cy="7" r="2" fill="currentColor" opacity="0.5"/></svg>
-        </div>
-        <div class="msg-bubble" style="max-width:100%;padding:0;background:transparent;border:none;">${html}</div>`;
-
-    console.log('Appending selection panel to chat');
-    chatContainer.appendChild(msgDiv);
-    scrollToBottom();
-    console.log('Selection panel added successfully');
-}
-
-// Call leads/select/ and continue flow → auto-create campaign
-async function handleLeadSelection(percent, btnEl) {
-    if (!sessionId) {
-        addSystemMessage('❌ No session found. Please start a conversation first.');
-        return;
-    }
-
-    if (!lastSearchRunId) {
-        addSystemMessage('❌ No search run found. Please search for leads first.');
-        return;
-    }
-
-    // Mark button as selected, disable all
-    const panel = btnEl.closest('.lead-selection-panel');
-    panel.querySelectorAll('.lead-sel-btn').forEach(b => { b.disabled = true; b.classList.remove('selected'); });
-    btnEl.classList.add('selected');
-    btnEl.textContent = 'Selecting…';
-
-    try {
-        // ── Step 1: Select leads and create lead list ────────────────────────
-        const res = await apiFetch(`${API_BASE_URL}/leads/select/`, {
-            method: 'POST',
-            headers: getAuthHeaders(),
-            body: JSON.stringify({
-                session_id: sessionId,
-                search_run_id: lastSearchRunId,
-                selection_percent: percent,
-            })
-        });
-
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Lead selection failed');
-
-        // Replace panel with confirmation
-        const selMsg = document.getElementById('leadSelectionMsg');
-        if (selMsg) selMsg.remove();
-
-        addSystemMessage(`✅ Selected ${data.selected_count} leads (${percent}%) — lead list created`);
-
-        // ── Step 2: Auto-create campaign linked to this lead list ────────────
-        btnEl.textContent = 'Creating campaign…';
-        updateStatus('Creating campaign...', 'active');
-
-        const campaignRes = await apiFetch(`${API_BASE_URL}/campaigns/create/`, {
-            method: 'POST',
-            headers: getAuthHeaders(),
-            body: JSON.stringify({
-                session_id: sessionId,
-                lead_list_id: data.lead_list_id,
-                search_run_id: data.search_run_id || lastSearchRunId,
-            })
-        });
-
-        const campaignData = await campaignRes.json();
-        if (!campaignRes.ok) throw new Error(campaignData.error || 'Campaign creation failed');
-
-        addSystemMessage(`✅ Campaign "${campaignData.campaign_name}" created`);
-
-        // ── Step 3: Continue conversation — ask for campaign goal ────────────
-        // Send a message through the conversation API so the CampaignAgent
-        // picks up the flow and asks the right clarification questions.
-        const typingId = showTypingIndicator();
-        const msgRes = await apiFetch(`${API_BASE_URL}/conversation/message/`, {
-            method: 'POST',
-            headers: getAuthHeaders(),
-            body: JSON.stringify({
-                session_id: sessionId,
-                text: 'I selected the leads, now help me create the campaign emails'
-            })
-        });
-
-        removeTypingIndicator(typingId);
-
-        const msgData = await msgRes.json();
-        if (msgRes.ok) {
-            const botReply = msgData.text || msgData.reply || msgData.message ||
-                "Great! Now let's build your campaign. What's the goal of this campaign?";
-            addBotMessage(botReply);
-
-            // If campaign is already generated (fast path), show it
-            if (msgData.campaign_id && msgData.sequence_list) {
-                addSystemMessage('✅ Campaign created successfully!');
-                displayCampaignSummary(msgData);
-            }
-        } else {
-            addBotMessage("Great! Now let's build your campaign. What's the goal of this campaign?");
-        }
-
-        updateStatus('Ready to chat', 'active');
-
-    } catch (err) {
-        console.error('Lead selection error:', err);
-        panel.querySelectorAll('.lead-sel-btn').forEach(b => { b.disabled = false; });
-        btnEl.classList.remove('selected');
-        btnEl.innerHTML = `<span class="sel-label">${percent === 100 ? 'All leads' : 'Top ' + percent + '%'}</span>`;
-        addSystemMessage(`❌ Lead selection failed: ${err.message}`);
-        updateStatus('Error occurred', 'error');
-    }
-}
-
-// Manual trigger for selection panel (when leads are already shown)
-function showLeadSelectionPanel() {
-    if (!lastLeadCount || lastLeadCount === 0) {
-        addSystemMessage('❌ No leads found. Please search for leads first.');
-        return;
-    }
-    displayLeadSelectionPanel(lastLeadCount);
 }
 
 // Display campaign details with email sequences
@@ -1304,6 +714,7 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('Campaign Demo Frontend loaded');
     updateStatus('Ready to start');
     checkBackendConnection();
+    loadMyCampaigns();
 });
 
 // Check backend connection
@@ -1409,23 +820,8 @@ async function showSendEmailModal(emailId, stepOrder, campaignId, isTestMode) {
 }
 
 function connectGmail() {
-    const headers = getAuthHeaders();
-
-    // Check if we have a valid token
-    if (!headers['Authorization']) {
-        alert('Please login first to connect Gmail');
-        return;
-    }
-
-    fetch(AUTH_BASE_URL + '/gmail/connect/', { headers })
-        .then(r => {
-            if (r.status === 401) {
-                alert('Your session has expired. Please login again.');
-                window.location.href = 'login.html';
-                return null;
-            }
-            return r.json();
-        })
+    fetch(AUTH_BASE_URL + '/gmail/connect/', { headers: getAuthHeaders() })
+        .then(r => r.json())
         .then(data => {
             if (data && data.auth_url) {
                 window.location.href = data.auth_url;
@@ -1726,7 +1122,6 @@ async function showInboxView() {
     if (infoPanel) infoPanel.style.display = 'none';
     document.getElementById('inboxPanel').style.display = 'block';
     document.getElementById('profilePanel').style.display = 'none';
-    document.getElementById('campaignsPanel').style.display = 'none';
 
     // Update nav active state
     document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
@@ -1751,7 +1146,6 @@ function showCampaignView() {
     if (infoPanel) infoPanel.style.display = 'block';
     document.getElementById('inboxPanel').style.display = 'none';
     document.getElementById('profilePanel').style.display = 'none';
-    document.getElementById('campaignsPanel').style.display = 'none';
 
     // Update nav active state
     document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
@@ -1771,37 +1165,25 @@ function showProfileView() {
     if (infoPanel) infoPanel.style.display = 'none';
     document.getElementById('inboxPanel').style.display = 'none';
     document.getElementById('profilePanel').style.display = 'block';
-    document.getElementById('campaignsPanel').style.display = 'none';
 
     document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
     document.querySelectorAll('.nav-item')[3].classList.add('active');
 
-    // Populate user card from localStorage
-    try {
-        const user = JSON.parse(localStorage.getItem('user') || '{}');
-        const fullName = [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email || '—';
-        const initials = fullName.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) || '?';
-        document.getElementById('profileAvatar').textContent = initials;
-        document.getElementById('profileName').textContent = fullName;
-        document.getElementById('profileEmailDisplay').textContent = user.email || '—';
-    } catch (e) { }
+    // Populate user card from the default account
+    apiFetch(`${AUTH_BASE_URL}/me/`, { headers: getAuthHeaders() })
+        .then(r => r.json())
+        .then(data => {
+            const user = data && data.user;
+            if (!user) return;
+            const fullName = [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email || '—';
+            const initials = fullName.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) || '?';
+            document.getElementById('profileAvatar').textContent = initials;
+            document.getElementById('profileName').textContent = fullName;
+            document.getElementById('profileEmailDisplay').textContent = user.email || '—';
+        })
+        .catch(() => {});
 
     loadCompanyProfile();
-}
-
-function showMyCampaignsView() {
-    document.querySelector('.chat-panel').style.display = 'none';
-    const infoPanel = document.querySelector('.info-panel');
-    if (infoPanel) infoPanel.style.display = 'none';
-    document.getElementById('inboxPanel').style.display = 'none';
-    document.getElementById('profilePanel').style.display = 'none';
-    document.getElementById('campaignsPanel').style.display = 'block';
-
-    document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
-    document.querySelectorAll('.nav-item')[2].classList.add('active');
-
-    loadMyCampaigns();
-    loadProfileInsights();
 }
 
 async function loadCompanyProfile() {
@@ -1855,110 +1237,6 @@ async function saveCompanyProfile() {
         btn.disabled = false;
         btn.textContent = 'Save';
         setTimeout(() => { statusEl.textContent = ''; statusEl.className = 'company-info-status'; }, 3000);
-    }
-}
-
-// Load AI insights into the profile panel
-async function loadProfileInsights() {
-    const loadingEl = document.getElementById('profileInsightsLoading');
-    const insightsEl = document.getElementById('profileInsights');
-    const errorEl = document.getElementById('profileInsightsError');
-
-    loadingEl.style.display = 'block';
-    insightsEl.style.display = 'none';
-    errorEl.style.display = 'none';
-
-    try {
-        const response = await apiFetch(SERVER_BASE_URL + '/api/ml/insights/');
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const data = await response.json();
-
-        // Update profile card with verified server-side user info
-        const ui = data.user_info || {};
-        const ai = data.account_info || {};
-        if (ui.full_name) {
-            const initials = ui.full_name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) || '?';
-            document.getElementById('profileAvatar').textContent = initials;
-            document.getElementById('profileName').textContent = ui.full_name;
-            document.getElementById('profileEmailDisplay').textContent = ui.email || '—';
-        }
-        if (ai.name) {
-            let roleEl = document.getElementById('profileAccountName');
-            if (!roleEl) {
-                roleEl = document.createElement('div');
-                roleEl.id = 'profileAccountName';
-                roleEl.className = 'profile-account-name';
-                document.querySelector('.profile-user-card').appendChild(roleEl);
-            }
-            roleEl.textContent = ai.name + (ui.role ? ` · ${ui.role}` : '');
-        }
-
-        // Metrics cards — all 5 fields from api/services/ai_insights_service.py
-        const m = data.metrics || {};
-        const metricsEl = document.getElementById('insightsMetrics');
-        metricsEl.innerHTML = [
-            { label: 'Campaigns Generated', value: m.total_campaigns_generated ?? 0 },
-            { label: 'Emails Generated', value: m.total_emails_generated ?? 0 },
-            { label: 'Avg Spam Score', value: m.average_spam_score != null ? m.average_spam_score : '—' },
-            { label: 'Avg Context Completeness', value: m.average_context_completeness != null ? m.average_context_completeness : '—' },
-            { label: 'AI Conversations', value: m.total_ai_conversations ?? 0 },
-        ].map(c => `
-            <div class="insight-metric-card">
-              <div class="insight-metric-value">${c.value}</div>
-              <div class="insight-metric-label">${c.label}</div>
-            </div>`).join('');
-
-        // Recent generations list
-        const gens = data.recent_generations || [];
-        const gensEl = document.getElementById('insightsGenerations');
-        if (gens.length) {
-            gensEl.innerHTML = '<div class="insights-sub-title">Recent Generations</div>' +
-                gens.map(g => `
-                <div class="insight-gen-row">
-                  <span class="insight-gen-type ${g.type}">${g.type}</span>
-                  <span class="insight-gen-name">${g.campaign_name || 'Unnamed'}</span>
-                  <span class="insight-gen-date">${g.created_at ? new Date(g.created_at).toLocaleDateString() : '—'}</span>
-                </div>`).join('');
-        } else {
-            gensEl.innerHTML = '<div class="insights-empty">No generations yet.</div>';
-        }
-
-        // Spam risk factors
-        const spamEl = document.getElementById('insightsSpam');
-        const spam = data.spam_risk_factors || [];
-        if (spam.length) {
-            spamEl.innerHTML = '<div class="insights-sub-title">Spam Risk Factors</div>' +
-                spam.map(s => `
-                <div class="insight-gen-row">
-                  <span class="insight-gen-type" style="background:rgba(239,68,68,0.12);color:var(--red);">${s.provider || 'unknown'}</span>
-                  <span class="insight-gen-name">${Array.isArray(s.risk_factors) ? s.risk_factors.join(', ') : (s.risk_factors || '—')}</span>
-                  <span class="insight-gen-date">score: ${s.normalized_score != null ? s.normalized_score : '—'}</span>
-                </div>`).join('');
-        } else {
-            spamEl.innerHTML = '<div class="insights-sub-title">Spam Risk Factors</div><div class="insights-empty">No spam analyses yet.</div>';
-        }
-
-        // Conversation stage distribution
-        const stageEl = document.getElementById('insightsStages');
-        const stages = data.conversation_stage_distribution || {};
-        const stageEntries = Object.entries(stages);
-        if (stageEntries.length) {
-            stageEl.innerHTML = '<div class="insights-sub-title">Conversation Stage Distribution</div>' +
-                stageEntries.map(([stage, count]) => `
-                <div class="insight-gen-row">
-                  <span class="insight-gen-type">${stage || 'unknown'}</span>
-                  <span class="insight-gen-name" style="flex:none;">${count} conversation${count !== 1 ? 's' : ''}</span>
-                </div>`).join('');
-        } else {
-            stageEl.innerHTML = '<div class="insights-sub-title">Conversation Stage Distribution</div><div class="insights-empty">No conversation data yet.</div>';
-        }
-
-        loadingEl.style.display = 'none';
-        insightsEl.style.display = 'block';
-    } catch (e) {
-        loadingEl.style.display = 'none';
-        errorEl.textContent = 'Could not load insights. ' + e.message;
-        errorEl.style.display = 'block';
     }
 }
 
@@ -2360,338 +1638,26 @@ async function fetchGmailReplies() {
     }
 }
 
-// ─── My Campaigns Management ────────────────────────────────────────────────
+// ─── Emails Sent Stat ────────────────────────────────────────────────────────
 
 async function loadMyCampaigns() {
-    const listEl = document.getElementById('myCampaignsList');
-    if (!listEl) return;
-    listEl.innerHTML = '<div class="profile-loading">Loading campaigns…</div>';
+    const countEl = document.getElementById('emailsSentCount');
+    if (!countEl) return;
 
     try {
-        console.log('Loading campaigns with auth:', !!getAccessToken());
-
         const res = await apiFetch(`${API_BASE_URL}/campaigns/list/`, {
             headers: getAuthHeaders()
         });
-
-        console.log('Campaigns response status:', res.status);
-
-        if (res.status === 401) {
-            listEl.innerHTML = '<div class="campaigns-empty">Please log in to view campaigns.</div>';
-            return;
-        }
+        if (!res.ok) return;
 
         const data = await res.json();
-        console.log('Campaigns data:', data);
-
-        if (!res.ok || !data.success) {
-            throw new Error(data.error || 'Failed to load');
-        }
+        if (!data.success) return;
 
         const campaigns = data.campaigns || [];
-        console.log('Number of campaigns:', campaigns.length);
-
-        const summaryEl = document.getElementById('campaignsSummary');
-        if (summaryEl) {
-            if (campaigns.length === 0) {
-                summaryEl.style.display = 'none';
-            } else {
-                const activeCount = campaigns.filter(c => c.status === 'active').length;
-                summaryEl.style.display = 'block';
-                summaryEl.innerHTML = activeCount > 0
-                    ? `<span class="running-count">${activeCount} running</span> · ${campaigns.length} total`
-                    : `${campaigns.length} total · <span>none running</span>`;
-            }
-        }
-
-        if (campaigns.length === 0) {
-            listEl.innerHTML = '<div class="campaigns-empty">No campaigns yet.</div>';
-            return;
-        }
-
-        listEl.innerHTML = campaigns.map(c => {
-            const isStopped = c.status === 'blocked';
-            const date = new Date(c.created_at).toLocaleDateString();
-            const stats = c.stats || {};
-            const steps = c.steps || [];
-
-            console.log('Campaign:', c.name, 'Stats:', stats, 'Steps:', steps);
-
-            // Infer campaign type: 1 lead = test, >1 = bulk lead list
-            const isTest = (stats.total_leads || 0) <= 1 && (stats.total_sent || 0) <= (stats.total_steps || 1);
-            const typeLabel = isTest ? '🧪 Test' : '📋 Bulk';
-            const typeCls = isTest ? 'ctype-test' : 'ctype-bulk';
-
-            // Calculate progress percentage
-            const progress = stats.total_to_send > 0
-                ? Math.round((stats.total_sent / stats.total_to_send) * 100)
-                : 0;
-
-            // Build step schedule info
-            const stepSchedule = steps.map((step, idx) => {
-                const dayLabel = step.delay_days === 0 ? 'Immediately' :
-                    step.delay_days === 1 ? 'After 1 day' :
-                        `After ${step.delay_days} days`;
-                return `
-                    <div class="step-schedule-item">
-                        <span class="step-number">Step ${step.step_order}</span>
-                        <span class="step-timing">${dayLabel}</span>
-                        <span class="step-progress">${step.emails_sent}/${stats.total_leads || 0} sent</span>
-                    </div>
-                `;
-            }).join('');
-
-            return `
-            <div class="campaign-row" id="crow-${c.id}">
-              <div class="campaign-row-header">
-                <div class="campaign-row-info">
-                  <div class="campaign-row-name">${escapeHtml(c.name)}</div>
-                  <div class="campaign-row-meta">
-                    <span class="campaign-type-badge ${typeCls}">${typeLabel}</span>
-                    <span class="campaign-row-status status-${c.status}">${c.status}</span>
-                    <span class="campaign-row-date">${date}</span>
-                  </div>
-                </div>
-                <div class="campaign-row-actions">
-                  <button class="crow-btn crow-details" onclick="showCampaignProgress('${c.id}')" title="View detailed progress">
-                    📊 Details
-                  </button>
-                  ${!isStopped ? `
-                  <button class="crow-btn crow-stop" onclick="manageCampaign('${c.id}', 'stop', this)" title="Stop campaign">
-                    ⏹ Stop
-                  </button>` : `
-                  <span class="crow-stopped-label">Stopped</span>`}
-                  <button class="crow-btn crow-delete" onclick="manageCampaign('${c.id}', 'delete', this)" title="Delete campaign">
-                    🗑 Delete
-                  </button>
-                </div>
-              </div>
-              
-              <div class="campaign-stats">
-                <div class="stat-item">
-                  <div class="stat-label">Total Leads</div>
-                  <div class="stat-value">${stats.total_leads || 0}</div>
-                </div>
-                <div class="stat-item">
-                  <div class="stat-label">Emails Sent</div>
-                  <div class="stat-value">${stats.total_sent || 0}</div>
-                </div>
-                <div class="stat-item">
-                  <div class="stat-label">Remaining</div>
-                  <div class="stat-value">${stats.remaining || 0}</div>
-                </div>
-                <div class="stat-item">
-                  <div class="stat-label">Opened</div>
-                  <div class="stat-value">${stats.opened || 0}</div>
-                </div>
-                <div class="stat-item">
-                  <div class="stat-label">Replied</div>
-                  <div class="stat-value">${stats.replied || 0}</div>
-                </div>
-              </div>
-              
-              <div class="campaign-progress">
-                <div class="progress-bar-container">
-                  <div class="progress-bar" style="width: ${progress}%"></div>
-                </div>
-                <div class="progress-text">${progress}% complete</div>
-              </div>
-              
-              ${stepSchedule ? `
-              <div class="campaign-schedule">
-                <div class="schedule-title">Email Schedule:</div>
-                <div class="step-schedule-list">
-                  ${stepSchedule}
-                </div>
-              </div>
-              ` : ''}
-            </div>`;
-        }).join('');
-
+        const totalSent = campaigns.reduce((sum, c) => sum + ((c.stats || {}).total_sent || 0), 0);
+        countEl.textContent = totalSent;
     } catch (e) {
-        console.error('Load campaigns error:', e);
-        listEl.innerHTML = `<div class="campaigns-empty">Could not load campaigns. ${e.message}<br><small>Check console for details</small></div>`;
-    }
-}
-
-async function manageCampaign(campaignId, action, btn) {
-    const label = action === 'delete' ? 'delete this campaign permanently' : 'stop this campaign';
-    if (!confirm(`Are you sure you want to ${label}?`)) return;
-
-    btn.disabled = true;
-    const original = btn.textContent;
-    btn.textContent = action === 'delete' ? 'Deleting…' : 'Stopping…';
-
-    try {
-        const res = await apiFetch(`${API_BASE_URL}/campaigns/manage/`, {
-            method: 'POST',
-            headers: getAuthHeaders(),
-            body: JSON.stringify({ campaign_id: campaignId, action })
-        });
-        const data = await res.json();
-
-        if (res.ok && data.success) {
-            if (action === 'delete') {
-                const row = document.getElementById(`crow-${campaignId}`);
-                if (row) row.remove();
-                // If list is now empty, show empty message
-                const listEl = document.getElementById('myCampaignsList');
-                if (listEl && !listEl.querySelector('.campaign-row')) {
-                    listEl.innerHTML = '<div class="campaigns-empty">No campaigns yet.</div>';
-                }
-            } else {
-                // Update row to show stopped state
-                const row = document.getElementById(`crow-${campaignId}`);
-                if (row) {
-                    const statusEl = row.querySelector('.campaign-row-status');
-                    if (statusEl) { statusEl.textContent = 'blocked'; statusEl.className = 'campaign-row-status status-blocked'; }
-                    const stopBtn = row.querySelector('.crow-stop');
-                    if (stopBtn) stopBtn.outerHTML = '<span class="crow-stopped-label">Stopped</span>';
-                }
-            }
-        } else {
-            alert(data.error || 'Action failed. Please try again.');
-            btn.disabled = false;
-            btn.textContent = original;
-        }
-    } catch (e) {
-        alert('Request failed. Is the server running?');
-        btn.disabled = false;
-        btn.textContent = original;
-    }
-}
-
-// ─── Campaign Progress Detail Modal ─────────────────────────────────────────
-
-async function showCampaignProgress(campaignId) {
-    // Remove any existing progress modal
-    const existing = document.getElementById('campaignProgressModal');
-    if (existing) existing.remove();
-
-    // Show loading modal immediately
-    const loadingHtml = `
-    <div id="campaignProgressModal" class="modal-overlay" onclick="if(event.target===this)this.remove()">
-      <div class="modal-content" style="max-width:520px;">
-        <div class="modal-header">
-          <h3 style="margin:0;">Campaign Progress</h3>
-          <button class="modal-close" onclick="document.getElementById('campaignProgressModal').remove()">✕</button>
-        </div>
-        <div class="modal-body" style="text-align:center; padding:30px;">
-          <div style="color:var(--slate);">Loading progress…</div>
-        </div>
-      </div>
-    </div>`;
-    document.body.insertAdjacentHTML('beforeend', loadingHtml);
-
-    try {
-        const res = await apiFetch(`${API_BASE_URL}/campaigns/manage/`, {
-            method: 'POST',
-            headers: getAuthHeaders(),
-            body: JSON.stringify({ campaign_id: campaignId, action: 'progress' })
-        });
-        const data = await res.json();
-
-        if (!res.ok || !data.success) {
-            throw new Error(data.error || 'Failed to load progress');
-        }
-
-        const p = data.progress;
-        const typeLabel = data.campaign_type === 'test' ? '🧪 Test Campaign' : '📋 Lead List Campaign';
-        const statusCls = `status-${data.campaign_status}`;
-
-        // Build per-step rows
-        const stepsHtml = (data.steps || []).map(s => {
-            const dayLabel = s.delay_days === 0 ? 'Immediately' :
-                s.delay_days === 1 ? 'After 1 day' :
-                    `After ${s.delay_days} days`;
-            const stepPct = (p.total_leads > 0)
-                ? Math.round((s.emails_sent / p.total_leads) * 100) : 0;
-            return `
-                <div class="step-schedule-item">
-                    <span class="step-number">Step ${s.step_order}</span>
-                    <span class="step-timing">${dayLabel} · ${s.condition}</span>
-                    <span class="step-progress">${s.emails_sent}/${p.total_leads} sent (${stepPct}%)</span>
-                </div>`;
-        }).join('');
-
-        // Build lead status breakdown
-        const ls = p.lead_status || {};
-        const leadRows = [
-            { label: 'In Sequence', val: ls.in_sequence, cls: 'clr-blue' },
-            { label: 'Completed', val: ls.completed, cls: 'clr-green' },
-            { label: 'Replied', val: ls.replied, cls: 'clr-green' },
-            { label: 'Pending', val: ls.pending, cls: 'clr-amber' },
-            { label: 'Bounced', val: ls.bounced, cls: 'clr-red' },
-            { label: 'Unsubscribed', val: ls.unsubscribed, cls: 'clr-red' },
-        ].filter(r => r.val > 0);
-
-        const leadStatusHtml = leadRows.length > 0
-            ? leadRows.map(r => `<span class="progress-chip ${r.cls}">${r.label}: ${r.val}</span>`).join('')
-            : '<span style="color:var(--slate-dim); font-size:12px;">No leads enrolled yet</span>';
-
-        // Email delivery breakdown
-        const es = p.email_status || {};
-        const emailRows = [
-            { label: 'Sent', val: es.sent },
-            { label: 'Delivered', val: es.delivered },
-            { label: 'Opened', val: es.opened },
-            { label: 'Clicked', val: es.clicked },
-            { label: 'Replied', val: es.replied },
-            { label: 'Bounced', val: es.bounced },
-            { label: 'Failed', val: es.failed },
-        ].filter(r => r.val > 0);
-
-        const emailStatusHtml = emailRows.length > 0
-            ? emailRows.map(r => `<span class="progress-chip">${r.label}: ${r.val}</span>`).join('')
-            : '<span style="color:var(--slate-dim); font-size:12px;">No emails sent yet</span>';
-
-        const modalBody = `
-          <div class="progress-detail-header">
-            <div class="progress-detail-name">${escapeHtml(data.campaign_name)}</div>
-            <div class="progress-detail-meta">
-              <span class="campaign-type-badge ${data.campaign_type === 'test' ? 'ctype-test' : 'ctype-bulk'}">${typeLabel}</span>
-              <span class="campaign-row-status ${statusCls}">${data.campaign_status}</span>
-            </div>
-          </div>
-
-          <div class="campaign-progress" style="margin:16px 0;">
-            <div class="progress-bar-container">
-              <div class="progress-bar" style="width: ${p.percent_complete}%"></div>
-            </div>
-            <div class="progress-text">${p.percent_complete}% complete · ${p.total_sent} / ${p.total_to_send} emails · ${p.remaining} remaining</div>
-          </div>
-
-          <div class="progress-section">
-            <div class="progress-section-title">Lead Progress</div>
-            <div class="progress-chips">${leadStatusHtml}</div>
-          </div>
-
-          <div class="progress-section">
-            <div class="progress-section-title">Email Delivery</div>
-            <div class="progress-chips">${emailStatusHtml}</div>
-          </div>
-
-          ${stepsHtml ? `
-          <div class="progress-section">
-            <div class="progress-section-title">Step-by-Step</div>
-            <div class="step-schedule-list">${stepsHtml}</div>
-          </div>` : ''}
-        `;
-
-        // Replace modal body
-        const modal = document.getElementById('campaignProgressModal');
-        const body = modal.querySelector('.modal-body');
-        body.style.textAlign = '';
-        body.style.padding = '';
-        body.innerHTML = modalBody;
-
-    } catch (e) {
-        console.error('Campaign progress error:', e);
-        const modal = document.getElementById('campaignProgressModal');
-        if (modal) {
-            const body = modal.querySelector('.modal-body');
-            body.innerHTML = `<div style="color:var(--red); padding:20px;">Failed to load progress: ${e.message}</div>`;
-        }
+        console.error('Load emails sent stat error:', e);
     }
 }
 
@@ -2842,4 +1808,70 @@ async function autoFetchReplies() {
     } catch (error) {
         console.error('Auto-fetch error:', error);
     }
+}
+
+// ─── Show uploaded leads in chat after redirect from lead-upload.html ──────
+
+function formatUploadedLeadsMessage(result) {
+    const imported = result.imported || 0;
+    const updated = result.updated || 0;
+    const skipped = result.skipped || 0;
+    const total = imported + updated;
+    const listPart = result.lead_list_name ? ` to "${result.lead_list_name}"` : '';
+
+    const lines = [];
+    lines.push(
+        `Uploaded ${total} lead${total === 1 ? '' : 's'}${listPart} — ${imported} new, ${updated} updated` +
+        (skipped ? `, ${skipped} skipped` : '') + '.'
+    );
+
+    const leads = result.leads || [];
+    if (leads.length) {
+        lines.push('');
+        leads.forEach(l => {
+            const name = [l.first_name, l.last_name].filter(Boolean).join(' ') || l.email;
+            const extra = [l.title, l.company_name].filter(Boolean).join(' at ');
+            lines.push(`• ${name} (${l.email})${extra ? ` — ${extra}` : ''}`);
+        });
+        if (result.leads_truncated) {
+            lines.push(`…and ${total - leads.length} more.`);
+        }
+    }
+
+    lines.push('');
+    lines.push('You can now ask me to create a campaign for these leads.');
+
+    return lines.join('\n');
+}
+
+async function showUploadedLeadsIfAny() {
+    const raw = sessionStorage.getItem('leadUploadResult');
+    if (!raw) return;
+    sessionStorage.removeItem('leadUploadResult');
+
+    let result;
+    try {
+        result = JSON.parse(raw);
+    } catch (e) {
+        return;
+    }
+
+    const existingSessionId = sessionStorage.getItem('currentSessionId');
+    if (existingSessionId) {
+        // Resume the chat the upload was linked to — don't start a new one,
+        // or the campaign created next would lose the lead_list_id link.
+        sessionId = existingSessionId;
+        startBtn.style.display = 'none';
+        inputArea.style.display = 'flex';
+        updateStatus('Connected - Ready to chat', 'active');
+    } else if (startBtn.style.display !== 'none') {
+        await initializeConversation();
+    }
+    addBotMessage(formatUploadedLeadsMessage(result));
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', showUploadedLeadsIfAny);
+} else {
+    showUploadedLeadsIfAny();
 }

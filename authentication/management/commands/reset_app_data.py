@@ -52,7 +52,6 @@ class Command(BaseCommand):
                 "Campaign emails":   "campaign_emails",
                 "Sent emails":       "sent_emails",
                 "Email replies":     "email_replies",
-                "AI sessions":       "ai_sessions",
                 "ML conversations":  "ml_conversations",
                 "Campaign lead statuses": "campaign_lead_status",
             }

@@ -307,6 +307,12 @@ class CampaignService:
         steps = parsed_data.get("steps", [])
         if not steps:
             raise ValueError("LLM returned no campaign steps")
+
+        # HARD CAP: this platform sends exactly one email per campaign — no
+        # follow-up sequence. Truncate regardless of what the LLM returned.
+        if len(steps) > 1:
+            steps = steps[:1]
+            parsed_data["steps"] = steps
         # #steporder
         # for step in parsed_data.get("steps", []):
         #     step["steps"] = f"step_{step.get('step_order', 0)}"
@@ -330,18 +336,11 @@ class CampaignService:
 
         return parsed_data
     
-    def generate_email_draft(self, campaign_context: Dict, step_context: Dict, instructions: str, template_id: str = None) -> Dict:
+    def generate_email_draft(self, campaign_context: Dict, step_context: Dict, instructions: str) -> Dict:
         """
         Generates a specific email draft (Subject + Body) based on instructions.
-        If template_id is provided, uses that template (rendered with context data) as the system prompt.
         """
-        if template_id:
-            from .ai_prompt_template_service import AIPromptTemplateService
-            merged = {**(campaign_context or {}), **(step_context or {})}
-            built = AIPromptTemplateService.build_context(template_id, merged)
-            prompt = built["rendered_prompt"] if built else EMAIL_GENERATION_PROMPT
-        else:
-            prompt = EMAIL_GENERATION_PROMPT
+        prompt = EMAIL_GENERATION_PROMPT
 
         user_content = f"Campaign Context: {campaign_context}\nStep Context: {step_context}\nInstructions: {instructions}"
 
@@ -479,19 +478,12 @@ class CampaignService:
         except Exception as e:
              logger.warning(f"Failed to log generation: {e}")
 
-    def generate_subject_line(self, campaign_context: Dict, lead_attributes: Dict, instructions: str = "", template_id: str = None) -> str:
+    def generate_subject_line(self, campaign_context: Dict, lead_attributes: Dict, instructions: str = "") -> str:
         """
         Generates a single AI subject line based on campaign context and lead attributes.
         One GPT call. Returns a plain string.
-        If template_id is provided, uses that template (rendered with context data) as the system prompt.
         """
-        if template_id:
-            from .ai_prompt_template_service import AIPromptTemplateService
-            merged = {**(campaign_context or {}), **(lead_attributes or {})}
-            built = AIPromptTemplateService.build_context(template_id, merged)
-            prompt = built["rendered_prompt"] if built else SUBJECT_LINE_GENERATION_PROMPT
-        else:
-            prompt = SUBJECT_LINE_GENERATION_PROMPT
+        prompt = SUBJECT_LINE_GENERATION_PROMPT
 
         user_content = (
             f"Campaign Context: {json.dumps(campaign_context)}\n"

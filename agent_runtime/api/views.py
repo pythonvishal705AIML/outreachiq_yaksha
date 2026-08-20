@@ -14,14 +14,11 @@ from api.models import (
     CampaignEmail,
     CampaignStep,
     ConversationSession,
-    SearchRun,
 )
 from api.services.main_service import APIService
 from agent_runtime.mapping.response_mapper import map_message_result
 from agent_runtime.orchestrator.turn_manager import TurnManager
 from agent_runtime.persistence.repository import AgentRepository
-from agent_runtime.tools.lead_source_router import LeadSourceRouter
-from agent_runtime.services.lead_selection_service import LeadSelectionService
 from agent_runtime.services.campaign_service import CampaignService
 
 logger = logging.getLogger(__name__)
@@ -56,7 +53,7 @@ class AgentConversationInitView(APIView):
             try:
                 session = ConversationSession.objects.get(session_id=session_id)
                 state = session.state or {}
-                state['user_id'] = user.id
+                state['user_id'] = str(user.id)
                 session.state = state
                 session.save(update_fields=['state', 'updated_at'])
                 logger.info(f"Stored user_id {user.id} in session {session_id}")
@@ -108,59 +105,6 @@ class AgentConversationResetView(APIView):
         return Response({"message": "Conversation state reset"}, status=status.HTTP_200_OK)
 
 
-class AgentPeopleSearchView(APIView):
-    def post(self, request):
-        session_id = request.data.get("session_id")
-        params = request.data.get("params") or {}
-        channel = request.data.get("channel")  # No external provider configured by default
-        account_id = request.data.get("account_id")
-
-        if session_id and not params:
-            try:
-                session = ConversationSession.objects.get(session_id=session_id)
-                slots = (session.state or {}).get("slots", {})
-                if slots:
-                    params = dict(slots)
-                if not account_id:
-                    account_id = session.tenant_id
-            except ConversationSession.DoesNotExist:
-                pass
-        params["page"] = request.data.get("page", 1)
-        params["per_page"] = request.data.get("per_page", 10)
-        params["limit"] = params["per_page"]
-
-        try:
-            if session_id:
-                manager = TurnManager(session_id=session_id)
-                payload = manager.run_people_search(params=params, channel=channel, account_id=account_id)
-            else:
-                payload = LeadSourceRouter().search_people(
-                    params=params,
-                    preferred_source=channel,
-                    session_id=None,
-                    account_id=account_id,
-                )
-        except ConversationSession.DoesNotExist:
-            return Response({"error": "session not found"}, status=status.HTTP_404_NOT_FOUND)
-        except Exception as exc:
-            logger.exception("Agent people search failed: %s", exc)
-            return Response({"error": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        # ── Persist search_run_id in session state for downstream flow ───────
-        _search_run_id = payload.get("search_run_id") or str(payload.get("search_run_id", ""))
-        if session_id and _search_run_id:
-            try:
-                _session = ConversationSession.objects.get(session_id=session_id)
-                _state = _session.state or {}
-                _state["search_run_id"] = _search_run_id
-                _session.state = _state
-                _session.save(update_fields=["state", "updated_at"])
-            except ConversationSession.DoesNotExist:
-                pass
-
-        return Response(payload, status=status.HTTP_200_OK)
-
-
 class AgentConversationStreamView(APIView):
     """
     SSE streaming endpoint — returns Server-Sent Events so the frontend
@@ -203,42 +147,6 @@ class AgentConversationStreamView(APIView):
         response["Cache-Control"] = "no-cache"
         response["X-Accel-Buffering"] = "no"  # Disable nginx buffering
         return response
-
-
-# ─── 1. Lead Selection + Lead List Creation ──────────────────────────────────
-# POST /api/agent/v1/leads/select/
-# Body: { "session_id", "search_run_id" (optional), "selection_percent": 100|75|50|25, "lead_ids": [] (optional) }
-
-class AgentLeadSelectionView(APIView):
-    """
-    Select leads from a search run (by % or explicit IDs) and create a lead list
-    in lead_lists. Also updates leads.lead_list_id so the send-to-leads fallback works.
-    Selected lead IDs are stored in session state for downstream use.
-    """
-
-    def post(self, request):
-        session_id = request.data.get("session_id")
-        search_run_id = request.data.get("search_run_id")
-        selection_percent = int(request.data.get("selection_percent", 100))
-        explicit_lead_ids = request.data.get("lead_ids")  # optional override
-
-        if not session_id:
-            return Response({"error": "session_id required"}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            result = LeadSelectionService.select_leads_and_create_list(
-                session_id=session_id,
-                search_run_id=search_run_id,
-                selection_percent=selection_percent,
-                explicit_lead_ids=explicit_lead_ids
-            )
-            result["next_action"] = {"type": "call_api", "endpoint": "/api/agent/v1/campaigns/create/"}
-            return Response(result, status=status.HTTP_201_CREATED)
-        except ValueError as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as exc:
-            logger.exception("Lead selection failed: %s", exc)
-            return Response({"error": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # ─── 2. Campaign Create ─────────────────────────────────────────────────────
@@ -391,7 +299,7 @@ def _resolve_user(request):
 # Body: { "email_id", "recipient_email" }
 
 class AgentCampaignSendEmailView(APIView):
-    """Send a campaign email via Gmail OAuth or SMTP fallback."""
+    """Send a campaign email via Gmail OAuth or SMTP App Password fallback."""
 
     def post(self, request):
         from api.services.gmail_oauth_service import GmailOAuthService
@@ -418,8 +326,8 @@ class AgentCampaignSendEmailView(APIView):
                 )
             
             gmail_service = None
-            
-            # Priority 1: User's own SMTP App Password config
+
+            # Priority 1: User's own Gmail App Password config
             try:
                 from authentication.models import UserEmailConfig
                 cfg = UserEmailConfig.objects.get(user=user)
@@ -433,18 +341,17 @@ class AgentCampaignSendEmailView(APIView):
                 logger.info(f"Using user SMTP config: {cfg.from_email}")
             except UserEmailConfig.DoesNotExist:
                 pass
-            
+
             # Priority 2: Gmail OAuth
             if not gmail_service:
                 oauth_service = GmailOAuthService(user)
                 if oauth_service.is_connected():
                     gmail_service = oauth_service
                     logger.info("Using Gmail OAuth for authenticated user")
-            
-            # No fallback - user must configure their email
+
             if not gmail_service:
                 return Response(
-                    {"error": "Email not configured. Please add your email settings in the Settings menu or connect Gmail OAuth."},
+                    {"error": "Email not configured. Please add your Gmail App Password in the Settings menu or connect Gmail OAuth."},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
@@ -808,7 +715,7 @@ class AgentCampaignManageView(APIView):
 # Body: { "campaign_id", "step_order" (optional, default 1), "test_mode": true/false, "test_email" (required when test_mode) }
 
 class AgentCampaignSendToLeadsView(APIView):
-    """Send campaign emails to all leads via Gmail OAuth or SMTP fallback."""
+    """Send campaign emails to all leads via Gmail OAuth or SMTP App Password fallback."""
 
     def post(self, request):
         from api.services.gmail_oauth_service import GmailOAuthService
@@ -819,8 +726,6 @@ class AgentCampaignSendToLeadsView(APIView):
         step_order = request.data.get("step_order", 1)
         test_mode = request.data.get("test_mode", False)
         test_email = request.data.get("test_email")
-        session_id = request.data.get("session_id")
-        selection_percent = int(request.data.get("selection_percent", 100))
 
         if not campaign_id:
             return Response(
@@ -836,10 +741,10 @@ class AgentCampaignSendToLeadsView(APIView):
                     {"error": "Authentication required. Please log in to send emails."},
                     status=status.HTTP_401_UNAUTHORIZED
                 )
-            
+
             gmail_service = None
 
-            # Priority 1: User's own SMTP App Password config
+            # Priority 1: User's own Gmail App Password config
             try:
                 from authentication.models import UserEmailConfig
                 cfg = UserEmailConfig.objects.get(user=user)
@@ -861,10 +766,9 @@ class AgentCampaignSendToLeadsView(APIView):
                     gmail_service = oauth_service
                     logger.info("Using Gmail OAuth for authenticated user")
 
-            # No fallback - user must configure their email
             if not gmail_service:
                 return Response(
-                    {"error": "Email not configured. Please add your email settings in the Settings menu or connect Gmail OAuth."},
+                    {"error": "Email not configured. Please add your Gmail App Password in the Settings menu or connect Gmail OAuth."},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
@@ -989,69 +893,9 @@ class AgentCampaignSendToLeadsView(APIView):
                     "sent_from": sender_address,
                 }, status=status.HTTP_200_OK)
             
-            # Production mode: send to all leads
-            # ── Resolve leads via LeadSelectionService (agent flow) ──────────
-            from api.models import ConversationSession as APIConversationSession
-            from agent_runtime.services.lead_selection_service import LeadSelectionService
-
+            # Production mode: send to all leads in the campaign's uploaded lead list
             leads = []
-            search_run_id = None
-
-            try:
-                campaign_id_with_dashes = '-'.join([
-                    campaign_id_db[0:8], campaign_id_db[8:12],
-                    campaign_id_db[12:16], campaign_id_db[16:20],
-                    campaign_id_db[20:32]
-                ]) if len(campaign_id_db) == 32 else campaign_id_db
-
-                # Resolve session: by explicit session_id first, then by campaign_id in state
-                session = None
-                if session_id:
-                    session = APIConversationSession.objects.filter(session_id=session_id).first()
-                if not session:
-                    session = APIConversationSession.objects.filter(state__campaign_id=campaign_id_db).first()
-                if not session:
-                    session = APIConversationSession.objects.filter(state__campaign_id=campaign_id_with_dashes).first()
-
-                if session and session.state:
-                    state = session.state
-                    search_run_id = state.get("search_run_id")
-                    selected_lead_ids = state.get("selected_lead_ids")
-
-                    if search_run_id:
-                        # If leads not yet selected, run LeadSelectionService now to register
-                        # the batch into lead_lists_new and persist selected_lead_ids in session
-                        if not selected_lead_ids:
-                            selection_result = LeadSelectionService.select_leads_and_create_list(
-                                session_id=session.session_id,
-                                search_run_id=search_run_id,
-                                selection_percent=selection_percent,
-                            )
-                            session.refresh_from_db()
-                            selected_lead_ids = session.state.get("selected_lead_ids", [])
-                            logger.info(
-                                f"Lead selection registered: {selection_result['selected_count']} leads, "
-                                f"lead_list_id={selection_result['lead_list_id']}"
-                            )
-
-                        # Query exact leads by their IDs from the selection
-                        if selected_lead_ids:
-                            placeholders = ','.join(['%s'] * len(selected_lead_ids))
-                            with connection.cursor() as cursor:
-                                cursor.execute(
-                                    f"SELECT l.id, l.email, l.first_name, l.last_name, l.company_name "
-                                    f"FROM leads l "
-                                    f"WHERE l.id IN ({placeholders}) AND l.email IS NOT NULL",
-                                    selected_lead_ids
-                                )
-                                leads = cursor.fetchall()
-                            logger.info(f"Found {len(leads)} leads via lead selection (search_run_id: {search_run_id})")
-
-            except Exception as e:
-                logger.warning(f"Could not get leads from session/selection: {e}")
-
-            # Fall back to lead_list_id (campaign column) if selection flow yielded nothing
-            if not leads and lead_list_id:
+            if lead_list_id:
                 with connection.cursor() as cursor:
                     cursor.execute(
                         """SELECT l.id, l.email, l.first_name, l.last_name, l.company_name
@@ -1061,15 +905,13 @@ class AgentCampaignSendToLeadsView(APIView):
                     )
                     leads = cursor.fetchall()
                     logger.info(f"Found {len(leads)} leads from lead_list_id: {lead_list_id}")
-            
+
             if not leads:
                 error_msg = "No leads found for this campaign. "
-                if search_run_id:
-                    error_msg += f"Checked search_run_id: {search_run_id}. "
                 if lead_list_id:
                     error_msg += f"Checked lead_list_id: {lead_list_id}. "
-                error_msg += "Make sure leads are linked to the campaign via search results or lead list."
-                
+                error_msg += "Make sure leads are linked to the campaign via an uploaded lead list."
+
                 return Response(
                     {"error": error_msg},
                     status=status.HTTP_400_BAD_REQUEST
@@ -1179,12 +1021,8 @@ class AgentCampaignSendToLeadsView(APIView):
 
 class AgentInboxView(APIView):
     """
-    Get sent emails and replies for inbox view.
-    Pulls from TWO sources:
-      1. ``sent_emails``  — emails sent via the agent "Send to All Leads" flow.
-      2. ``email_messages`` + ``email_conversation`` — historical campaign emails
-         sent via GHL / old pipeline.
-    Results are merged, de-duplicated by recipient+subject, and sorted by date.
+    Get sent emails and replies for inbox view, from ``sent_emails``
+    (emails sent via the agent "Send to All Leads" flow).
     """
 
     def get(self, request):
@@ -1293,23 +1131,7 @@ class AgentInboxView(APIView):
                     "source": "agent",
                 })
 
-            # ── Source 2: historical (only on last page / if agent emails didn't fill page)
-            remaining = page_size - len(inbox_data)
             total_combined = total_agent
-            if remaining > 0 and offset + page_size >= total_agent:
-                historical_offset = max(0, offset - total_agent)
-                historical = self._fetch_historical_emails(
-                    org_id=org_id,
-                    campaign_id=campaign_id,
-                    limit=remaining,
-                    seen_keys=seen_keys,
-                    offset=historical_offset,
-                    user_emails=user_emails,
-                )
-                inbox_data.extend(historical)
-                # Rough total (historical count is expensive, estimate)
-                total_combined += len(historical)
-
             total_pages = math.ceil(total_combined / page_size) if total_combined else 1
 
             return Response(
@@ -1352,8 +1174,8 @@ class AgentInboxView(APIView):
                 logger.info(f"Found Gmail OAuth email: {gmail_token.gmail_address}")
         except Exception as e:
             logger.warning(f"Error getting Gmail token: {e}")
-        
-        # Get SMTP config email
+
+        # Get Gmail App Password config email
         try:
             from authentication.models import UserEmailConfig
             email_config = UserEmailConfig.objects.filter(user=user).first()
@@ -1362,7 +1184,7 @@ class AgentInboxView(APIView):
                 logger.info(f"Found SMTP email: {email_config.from_email}")
         except Exception as e:
             logger.warning(f"Error getting email config: {e}")
-        
+
         unique_emails = list(set(email_addresses))  # Remove duplicates
         logger.info(f"User {user.email} has email addresses: {unique_emails}")
         return unique_emails
@@ -1384,154 +1206,6 @@ class AgentInboxView(APIView):
             except Exception:
                 pass
         return None
-
-    @staticmethod
-    def _fetch_historical_emails(org_id, campaign_id, limit, seen_keys, offset=0, user_emails=None):
-        """
-        Pull historical outbound emails from ``email_messages`` joined with
-        ``email_conversation`` so we can display old campaign sends.
-        Filter by user_emails if provided to show only emails sent by this user.
-        Note: email_messages table may not have sent_from field, so we filter by campaign ownership.
-        """
-        results = []
-        try:
-            where_clauses = ["em.direction = 'outbound' OR em.sender_type = 'agent'"]
-            params = []
-
-            if campaign_id:
-                cid = campaign_id.replace("-", "")
-                where_clauses.append(
-                    "(ec.campaign_instance_id = %s OR ec.campaign_instance_id = %s)"
-                )
-                params += [campaign_id, cid]
-
-            # For historical emails, we can't filter by sent_from directly
-            # Instead, we rely on org_id scoping which is already in place
-            if org_id:
-                # Scope via campaign_instances(_new).org_id
-                where_clauses.append(
-                    """ec.campaign_instance_id IN (
-                        SELECT id FROM campaign_instances WHERE org_id = %s
-                        UNION
-                        SELECT id FROM campaign_instances_new WHERE org_id = %s
-                    )"""
-                )
-                params += [org_id, org_id]
-
-            where_sql = " AND ".join(where_clauses)
-
-            sql = f"""
-                SELECT
-                    em.id,
-                    ec.campaign_instance_id,
-                    em.message,
-                    em.created_at,
-                    em.status,
-                    l.email       AS recipient_email,
-                    l.first_name  AS first_name,
-                    l.last_name   AS last_name
-                FROM email_messages em
-                JOIN email_conversation ec ON ec.id = em.conversation_id
-                LEFT JOIN agent_leads l    ON l.id  = ec.lead_id
-                WHERE {where_sql}
-                ORDER BY em.created_at DESC
-                LIMIT %s OFFSET %s
-            """
-            params.append(limit * 2)  # over-fetch to handle dedup
-            params.append(offset)
-
-            with connection.cursor() as cur:
-                cur.execute(sql, params)
-                rows = cur.fetchall()
-
-            for row in rows:
-                msg_id, ci_id, body, created_at, msg_status, recip_email, fname, lname = row
-                recip_email = recip_email or "unknown"
-                subject = _extract_subject(body)
-                key = (recip_email, subject[:60])
-                if key in seen_keys:
-                    continue
-                seen_keys.add(key)
-
-                full_name = " ".join(filter(None, [fname, lname])) or recip_email
-
-                # Fetch inbound replies for this conversation
-                replies_list = AgentInboxView._fetch_historical_replies(msg_id)
-
-                results.append({
-                    "id": str(msg_id),
-                    "campaign_id": str(ci_id) if ci_id else "",
-                    "step_order": 1,
-                    "recipient_email": recip_email,
-                    "recipient_name": full_name,
-                    "subject": subject,
-                    "body": body or "",
-                    "body_preview": (body or "")[:200] + "..." if body and len(body) > 200 else (body or ""),
-                    "sent_at": created_at.isoformat() if created_at else "",
-                    "sent_from": "",
-                    "status": msg_status or "sent",
-                    "opened_at": None,
-                    "replied_at": replies_list[-1]["received_at"] if replies_list else None,
-                    "reply_count": len(replies_list),
-                    "has_unread_replies": any(not r.get("is_read", True) for r in replies_list),
-                    "replies": replies_list,
-                    "latest_reply": replies_list[-1] if replies_list else None,
-                    "source": "historical",
-                })
-                if len(results) >= limit:
-                    break
-
-        except Exception as exc:
-            logger.warning("Historical email fetch failed (non-fatal): %s", exc)
-
-        return results
-
-    @staticmethod
-    def _fetch_historical_replies(outbound_msg_id):
-        """Get inbound replies from the same conversation as the outbound msg."""
-        replies = []
-        try:
-            sql = """
-                SELECT em2.id, em2.message, em2.created_at, em2.is_read,
-                       l.email, l.first_name, l.last_name
-                FROM email_messages em2
-                JOIN email_messages em_orig ON em_orig.conversation_id = em2.conversation_id
-                LEFT JOIN email_conversation ec ON ec.id = em2.conversation_id
-                LEFT JOIN agent_leads l ON l.id = ec.lead_id
-                WHERE em_orig.id = %s
-                  AND (em2.direction = 'inbound' OR em2.sender_type = 'lead')
-                  AND em2.id != %s
-                ORDER BY em2.created_at ASC
-            """
-            with connection.cursor() as cur:
-                cur.execute(sql, [outbound_msg_id, outbound_msg_id])
-                for r in cur.fetchall():
-                    r_id, body, created_at, is_read, email, fname, lname = r
-                    replies.append({
-                        "id": str(r_id),
-                        "from_email": email or "unknown",
-                        "from_name": " ".join(filter(None, [fname, lname])) or email or "",
-                        "subject": _extract_subject(body),
-                        "body": body or "",
-                        "body_preview": (body or "")[:100] + "..." if body and len(body) > 100 else (body or ""),
-                        "received_at": created_at.isoformat() if created_at else "",
-                        "sentiment": None,
-                        "is_read": bool(is_read),
-                    })
-        except Exception as exc:
-            logger.warning("Historical reply fetch failed (non-fatal): %s", exc)
-        return replies
-
-
-def _extract_subject(body: str) -> str:
-    """Pull a short subject line from an email body."""
-    if not body:
-        return "(no subject)"
-    # First line or first 80 chars
-    first_line = body.strip().split("\n")[0].strip()
-    if len(first_line) > 80:
-        first_line = first_line[:77] + "..."
-    return first_line or "(no subject)"
 
 
 # ─── 8. Get Email Thread (Sent Email + All Replies) ────────────────────────
@@ -1585,66 +1259,7 @@ class AgentEmailThreadView(APIView):
             return Response({"success": True, "thread": thread_data}, status=status.HTTP_200_OK)
 
         except SentEmail.DoesNotExist:
-            pass  # Fall through to historical lookup
-
-        # ── Try historical email_messages table ───────────────────────────
-        try:
-            with connection.cursor() as cur:
-                cur.execute(
-                    """SELECT em.id, em.message, em.created_at, em.status,
-                              ec.campaign_instance_id,
-                              l.email, l.first_name, l.last_name
-                       FROM email_messages em
-                       JOIN email_conversation ec ON ec.id = em.conversation_id
-                       LEFT JOIN agent_leads l ON l.id = ec.lead_id
-                       WHERE em.id = %s""",
-                    [sent_email_id],
-                )
-                row = cur.fetchone()
-
-            if not row:
-                return Response({"error": "Email thread not found"}, status=status.HTTP_404_NOT_FOUND)
-
-            msg_id, body, created_at, msg_status, ci_id, recip_email, fname, lname = row
-            full_name = " ".join(filter(None, [fname, lname])) or recip_email or ""
-
-            # Get replies from same conversation
-            historical_replies = AgentInboxView._fetch_historical_replies(msg_id)
-
-            # Mark historical replies as read
-            try:
-                with connection.cursor() as cur:
-                    cur.execute(
-                        """UPDATE email_messages SET is_read = 1
-                           WHERE conversation_id = (
-                               SELECT conversation_id FROM email_messages WHERE id = %s
-                           ) AND (direction = 'inbound' OR sender_type = 'lead')""",
-                        [sent_email_id],
-                    )
-            except Exception:
-                pass
-
-            thread_data = {
-                "sent_email": {
-                    "id": str(msg_id),
-                    "campaign_id": str(ci_id) if ci_id else "",
-                    "step_order": 1,
-                    "recipient_email": recip_email or "",
-                    "recipient_name": full_name,
-                    "subject": _extract_subject(body),
-                    "body": body or "",
-                    "sent_at": created_at.isoformat() if created_at else "",
-                    "sent_from": "",
-                    "status": msg_status or "sent",
-                },
-                "replies": historical_replies,
-            }
-
-            return Response({"success": True, "thread": thread_data}, status=status.HTTP_200_OK)
-
-        except Exception as exc:
-            logger.exception("Get email thread failed: %s", exc)
-            return Response({"error": str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({"error": "Email thread not found"}, status=status.HTTP_404_NOT_FOUND)
 
 
 # ─── 9. Add Reply (Manual/Simulated) ───────────────────────────────────────
@@ -1743,7 +1358,7 @@ class AgentFetchRepliesView(APIView):
                     {
                         "success": True,
                         "new_replies": 0,
-                        "message": "No email account connected. Connect Gmail or set up App Password to fetch replies.",
+                        "message": "No email account connected. Connect Gmail or set up an App Password to fetch replies.",
                     },
                     status=status.HTTP_200_OK,
                 )
@@ -1824,7 +1439,6 @@ class AgentReplyToReplyView(APIView):
             to_email = reply.from_email
             subject = request.data.get("subject") or f"Re: {sent_email.subject}"
 
-            # Build gmail_service — same priority as send-email endpoint
             gmail_service = None
 
             try:
@@ -1847,7 +1461,7 @@ class AgentReplyToReplyView(APIView):
 
             if not gmail_service:
                 return Response(
-                    {"error": "Email not configured. Please add your email settings or connect Gmail OAuth."},
+                    {"error": "Email not configured. Please add your Gmail App Password or connect Gmail OAuth."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
@@ -1897,7 +1511,7 @@ class AgentReplyToReplyView(APIView):
 
 
 class _AppPasswordReplyFetcher:
-    """Lightweight IMAP reply fetcher for users with App Password config."""
+    """Lightweight IMAP reply fetcher for users with a Gmail App Password config."""
 
     def __init__(self, cfg):
         self.cfg = cfg
@@ -1998,6 +1612,7 @@ class _AppPasswordReplyFetcher:
         except Exception as exc:
             logger.warning("IMAP fetch failed: %s", exc)
             return {"success": False, "error": str(exc), "new_replies": 0}
+
 
 # ─── Business Profile GET/POST ────────────────────────────────────────────────
 # GET  /api/agent/v1/business-profile/  → returns current profile or {}
