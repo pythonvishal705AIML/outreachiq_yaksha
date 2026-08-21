@@ -306,12 +306,15 @@
       </div>
       <div class="modal-body">
 
+        <button class="modal-btn" onclick="connectGmail()" style="width:100%;margin-bottom:14px;">Connect Gmail with Google (recommended)</button>
+        <div style="font-size:12px;color:var(--white-60);opacity:0.7;margin:-6px 0 16px;">Uses Google sign-in — no App Password needed, and works even where direct SMTP is blocked.</div>
+
         <div class="email-option-card email-option-card-active" style="cursor:default;">
           <div class="email-option-icon">
             <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><rect x="2" y="4" width="18" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M2 7l9 6 9-6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </div>
-          <div class="email-option-title">Gmail</div>
-          <div class="email-option-desc">Send using your Gmail address and an App Password.</div>
+          <div class="email-option-title">Gmail (App Password)</div>
+          <div class="email-option-desc">Send using your Gmail address and an App Password. Requires direct SMTP access — may not work on all hosts.</div>
         </div>
 
         <div id="smtpConfigStatus" style="margin:16px 0 0;display:none;"></div>
