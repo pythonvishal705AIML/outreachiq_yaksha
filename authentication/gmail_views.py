@@ -1,8 +1,10 @@
 import logging
+import os
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 from django.conf import settings
 from django.core import signing
+from django.http import HttpResponseRedirect
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.views import APIView
@@ -10,6 +12,12 @@ from rest_framework.response import Response
 from rest_framework import status
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
+
+# Google silently adds "openid" and normalizes the requested
+# ".../auth/userinfo.email" scope to "email" in the token response.
+# oauthlib's default strict scope check treats that as a "Scope has
+# changed" error, so relax it — this is Google's own documented fix.
+os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 
 logger = logging.getLogger(__name__)
 
@@ -80,16 +88,22 @@ class GmailConnectView(APIView):
 
 @method_decorator(csrf_exempt, name='dispatch')
 class GmailCallbackView(APIView):
-    """Handles the OAuth callback, exchanges code for tokens, and saves them."""
+    """Handles the OAuth callback, exchanges code for tokens, saves them, and
+    redirects the browser back into the app (this URL is reached via a
+    top-level browser navigation from Google, not an XHR call from the SPA)."""
+
+    def _redirect(self, **params):
+        base = f"{settings.SERVER_URL.rstrip('/')}/campaign_demo_frontend/index.html"
+        return HttpResponseRedirect(f"{base}?{urlencode(params)}")
 
     def get(self, request):
         code = request.query_params.get("code")
         state = request.query_params.get("state")
 
         if not code:
-            return Response({"error": "Missing code parameter"}, status=status.HTTP_400_BAD_REQUEST)
+            return self._redirect(gmail_error="Missing code parameter")
         if not state:
-            return Response({"error": "Missing state parameter"}, status=status.HTTP_400_BAD_REQUEST)
+            return self._redirect(gmail_error="Missing state parameter")
 
         # Verify state and recover the user + PKCE code_verifier from the flow that started this
         try:
@@ -97,13 +111,13 @@ class GmailCallbackView(APIView):
             user_id = state_data["uid"]
             code_verifier = state_data["cv"]
         except (signing.BadSignature, KeyError, TypeError):
-            return Response({"error": "Invalid or expired state"}, status=status.HTTP_400_BAD_REQUEST)
+            return self._redirect(gmail_error="Invalid or expired state")
 
         from authentication.models import User, UserGmailToken
         try:
             user = User.objects.get(id=user_id, is_active=True)
         except User.DoesNotExist:
-            return Response({"error": "User not found"}, status=status.HTTP_400_BAD_REQUEST)
+            return self._redirect(gmail_error="User not found")
 
         try:
             flow = _build_flow()
@@ -116,7 +130,7 @@ class GmailCallbackView(APIView):
             gmail_address = user_info.get("email")
 
             if not gmail_address:
-                return Response({"error": "Could not retrieve Gmail address"}, status=status.HTTP_400_BAD_REQUEST)
+                return self._redirect(gmail_error="Could not retrieve Gmail address")
 
             UserGmailToken.objects.update_or_create(
                 user=user,
@@ -129,15 +143,11 @@ class GmailCallbackView(APIView):
             )
 
             logger.info(f"GmailCallbackView: connected {gmail_address} for user {user.email}")
-            return Response({
-                "success": True,
-                "gmail_address": gmail_address,
-                "message": "Gmail connected successfully",
-            })
+            return self._redirect(gmail_connected="1", gmail_address=gmail_address)
 
         except Exception as e:
             logger.error(f"GmailCallbackView: error: {e}", exc_info=True)
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return self._redirect(gmail_error=str(e))
 
 
 @method_decorator(csrf_exempt, name='dispatch')

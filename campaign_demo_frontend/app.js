@@ -196,10 +196,37 @@ if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
         updateUserUI();
         checkGmailStatus();
+        handleGmailOAuthRedirect();
     });
 } else {
     updateUserUI();
     checkGmailStatus();
+    handleGmailOAuthRedirect();
+}
+
+// After Google redirects back through the backend callback, it lands here
+// with ?gmail_connected=1&gmail_address=... or ?gmail_error=... in the URL.
+function handleGmailOAuthRedirect() {
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get('gmail_connected');
+    const address = params.get('gmail_address');
+    const error = params.get('gmail_error');
+
+    if (connected) {
+        alert(`Gmail connected: ${address}`);
+        checkGmailStatus();
+    } else if (error) {
+        alert('Failed to connect Gmail: ' + error);
+    } else {
+        return;
+    }
+
+    params.delete('gmail_connected');
+    params.delete('gmail_address');
+    params.delete('gmail_error');
+    const newSearch = params.toString();
+    const newUrl = window.location.pathname + (newSearch ? `?${newSearch}` : '') + window.location.hash;
+    window.history.replaceState({}, document.title, newUrl);
 }
 
 // State management
