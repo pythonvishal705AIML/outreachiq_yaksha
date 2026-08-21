@@ -1,4 +1,5 @@
 import logging
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 from django.conf import settings
 from django.core import signing
@@ -45,15 +46,12 @@ class GmailConnectView(APIView):
     def get(self, request):
         if not request.user or not request.user.is_authenticated:
             return Response({"error": "Authentication required"}, status=status.HTTP_401_UNAUTHORIZED)
-        # Embed a signed user ID in state to survive the unauthenticated callback
-        state = signing.dumps(str(request.user.id), salt=_STATE_SALT)
         flow = _build_flow()
 
         auth_url_kwargs = {
             "access_type": "offline",
             "include_granted_scopes": "true",
             "prompt": "consent",
-            "state": state,
         }
         # Optional: pre-fill/suggest which Google account to sign in with.
         # This never stores or transmits a password — Google still handles auth.
@@ -62,6 +60,21 @@ class GmailConnectView(APIView):
             auth_url_kwargs["login_hint"] = login_hint
 
         auth_url, _ = flow.authorization_url(**auth_url_kwargs)
+
+        # authorization_url() auto-generates a PKCE code_verifier on the flow
+        # instance, but that instance doesn't survive past this request (and
+        # wouldn't be shared across gunicorn worker processes even if it did).
+        # Embed both the user id and the verifier in the signed state so the
+        # callback — handled by any worker — can reconstruct the same flow.
+        state = signing.dumps(
+            {"uid": str(request.user.id), "cv": flow.code_verifier},
+            salt=_STATE_SALT,
+        )
+        parts = urlsplit(auth_url)
+        query = dict(parse_qsl(parts.query))
+        query["state"] = state
+        auth_url = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
         return Response({"auth_url": auth_url})
 
 
@@ -78,10 +91,12 @@ class GmailCallbackView(APIView):
         if not state:
             return Response({"error": "Missing state parameter"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Verify state and recover the user who initiated the flow
+        # Verify state and recover the user + PKCE code_verifier from the flow that started this
         try:
-            user_id = signing.loads(state, salt=_STATE_SALT, max_age=_STATE_MAX_AGE)
-        except signing.BadSignature:
+            state_data = signing.loads(state, salt=_STATE_SALT, max_age=_STATE_MAX_AGE)
+            user_id = state_data["uid"]
+            code_verifier = state_data["cv"]
+        except (signing.BadSignature, KeyError, TypeError):
             return Response({"error": "Invalid or expired state"}, status=status.HTTP_400_BAD_REQUEST)
 
         from authentication.models import User, UserGmailToken
@@ -92,6 +107,7 @@ class GmailCallbackView(APIView):
 
         try:
             flow = _build_flow()
+            flow.code_verifier = code_verifier
             flow.fetch_token(code=code)
             credentials = flow.credentials
 
