@@ -24,7 +24,7 @@ function getUserInitials() {
     } catch (e) { }
     return 'ME';
 }
-const DEFAULT_TENANT_ID = '12b2abd641734cce805b1544105042a7';  // Lopes account from database
+const DEFAULT_TENANT_ID = '465aa02d1a7b5689b20572a0ea30dd9a';  // Single-user app's auto-created default account (see authentication/middleware.py)
 
 // Authentication helpers
 function getUser() {

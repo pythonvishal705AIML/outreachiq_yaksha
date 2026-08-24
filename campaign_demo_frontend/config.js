@@ -5,8 +5,8 @@ const CONFIG = {
     // Backend API URL - update if your Django server runs on a different port
     API_BASE_URL: 'http://localhost:8000/api/agent/v1',
     
-    // Default tenant ID - using existing Lopes account from database
-    DEFAULT_TENANT_ID: '12b2abd641734cce805b1544105042a7',
+    // Default tenant ID - the single-user app's auto-created default account (see authentication/middleware.py)
+    DEFAULT_TENANT_ID: '465aa02d1a7b5689b20572a0ea30dd9a',
     
     // Alternative configurations for different environments
     ENVIRONMENTS: {

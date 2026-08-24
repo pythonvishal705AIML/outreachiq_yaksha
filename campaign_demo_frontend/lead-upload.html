@@ -109,7 +109,7 @@
     const SERVER_BASE_URL = (window.CONFIG && window.CONFIG.SERVER_URL) || 'http://localhost:8000';
     const API_BASE_URL = (window.CONFIG && window.CONFIG.API_BASE_URL) || `${SERVER_BASE_URL}/api/agent/v1`;
     const AUTH_BASE_URL = (window.CONFIG && window.CONFIG.AUTH_BASE_URL) || `${SERVER_BASE_URL}/api/auth`;
-    const DEFAULT_TENANT_ID = '12b2abd641734cce805b1544105042a7';
+    const DEFAULT_TENANT_ID = '465aa02d1a7b5689b20572a0ea30dd9a';  // Single-user app's auto-created default account (see authentication/middleware.py)
 
     // Single-user app — no login. This page may be opened directly (not via
     // index.html), so make sure the real account_id is cached before it's needed.
